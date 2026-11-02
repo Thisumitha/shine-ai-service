@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Local config and secrets
+.env
+.env.*
+!.env.example
+
+# Local data (vector store, chat history, caches)
+data/
+*.sqlite
+*.sqlite3
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
