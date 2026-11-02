@@ -13,3 +13,8 @@ Project foundation only: repository, folder architecture and the connection to t
 - `main`: stable, tagged releases
 - `develop`: integration branch
 - `feature/<name>`: one branch per step, merged into `develop`
+
+## For the team
+
+- `docs/TEAM_GUIDE.md`: setup, what to write in each folder and file, git workflow
+- `docs/ARCHITECTURE.md`: the layer rules in short
