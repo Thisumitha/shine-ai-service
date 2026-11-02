@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 
-from app.api import health
+from app.api.routers import health
 from app.container import build_container
 
 
