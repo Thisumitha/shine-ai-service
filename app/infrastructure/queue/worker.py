@@ -33,8 +33,8 @@ class Worker:
                 self.stopping.wait(self.wait_seconds)  # nothing to do, sleep a little
                 continue
             try:
-                self.process(job)
-                self.store.set_status(job["id"], "INDEXED")
+                final_status = self.process(job) or "INDEXED"
+                self.store.set_status(job["id"], final_status)
             except Exception as error:  # a bad PDF must not stop the worker
                 logger.warning("Job %s failed: %s", job["id"], error)
                 self.store.set_status(job["id"], "FAILED", str(error))

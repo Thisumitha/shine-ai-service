@@ -57,7 +57,7 @@ def test_bad_files_and_missing_fields(client):
     assert upload(client, form={"courseId": "3"}).status_code == 422
 
 
-def test_job_fails_until_pipeline_exists(client):
+def test_unreadable_pdf_marks_the_job_failed(client):
     upload(client)
     for _ in range(50):
         job = client.get("/internal/index/7", headers=SECRET).json()
@@ -65,7 +65,7 @@ def test_job_fails_until_pipeline_exists(client):
             break
         time.sleep(0.1)
     assert job["status"] == "FAILED"
-    assert "not implemented" in job["error"]
+    assert job["error"]
 
 
 def test_delete_removes_job_and_file(client, tmp_path):

@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.api.routers import health, internal
+from app.api.routers import health, internal, parse
 from app.config import Settings
 from app.container import build_container
 
@@ -21,6 +21,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.container = container
     app.include_router(health.router)
     app.include_router(internal.router)
+    app.include_router(parse.router)
     return app
 
 
