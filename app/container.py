@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
 from app.config import Settings, get_settings
+from app.domain.ports.ocr_engine import OcrEngine
 from app.infrastructure.ingestion.ocr_tesseract import TesseractOcr
 from app.infrastructure.ingestion.pipeline import PdfPipeline
 from app.infrastructure.queue.job_store import JobStore
@@ -14,6 +15,7 @@ class Container:
 
     settings: Settings
     job_store: JobStore
+    ocr: OcrEngine
     ingestion: IngestionService
     worker: Worker
 
@@ -25,4 +27,4 @@ def build_container(settings: Settings | None = None) -> Container:
     pipeline = PdfPipeline(ocr, settings.ocr_max_pages)
     ingestion = IngestionService(pipeline, settings.extracted_dir)
     worker = Worker(job_store, process=ingestion.process)
-    return Container(settings=settings, job_store=job_store, ingestion=ingestion, worker=worker)
+    return Container(settings=settings, job_store=job_store, ocr=ocr, ingestion=ingestion, worker=worker)
