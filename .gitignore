@@ -23,3 +23,6 @@ data/
 .vscode/
 .DS_Store
 Thumbs.db
+
+# Local planning notes (not committed)
+docs/PLAN_PDF_INGESTION.md

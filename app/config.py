@@ -12,6 +12,16 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     chroma_dir: str = "./data/chroma"
     sqlite_path: str = "./data/service.sqlite"
+    # Job queue database (MySQL). Create it once: CREATE DATABASE shine_ai CHARACTER SET utf8mb4;
+    database_url: str = "mysql+pymysql://root:@localhost:3306/shine_ai"
+    pdf_dir: str = "./data/pdfs"
+    extracted_dir: str = "./data/extracted"
+    chunks_dir: str = "./data/chunks"
+    max_pdf_mb: int = 50
+    # OCR for scanned pages. Leave tesseract_cmd empty if tesseract is on PATH.
+    tesseract_cmd: str = ""
+    ocr_language: str = "eng"
+    ocr_max_pages: int = 200
     port: int = 8000
 
 
