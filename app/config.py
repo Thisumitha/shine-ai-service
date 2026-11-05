@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     database_url: str = "mysql+pymysql://root:@localhost:3306/shine_ai"
     pdf_dir: str = "./data/pdfs"
     extracted_dir: str = "./data/extracted"
+    chunks_dir: str = "./data/chunks"
     max_pdf_mb: int = 50
     # OCR for scanned pages. Leave tesseract_cmd empty if tesseract is on PATH.
     tesseract_cmd: str = ""
