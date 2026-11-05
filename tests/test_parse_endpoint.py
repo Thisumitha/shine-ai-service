@@ -16,6 +16,7 @@ def make_client(tmp_path):
         database_url=f"sqlite:///{tmp_path / 'test.sqlite'}",
         pdf_dir=str(tmp_path / "pdfs"),
         extracted_dir=str(tmp_path / "extracted"),
+        chunks_dir=str(tmp_path / "chunks"),
     )
     return TestClient(create_app(settings))
 
@@ -49,3 +50,14 @@ def test_service_saves_parsed_pages_for_the_chunking_stage(tmp_path):
     saved = json.loads((tmp_path / "extracted" / "5.json").read_text(encoding="utf-8"))
     assert status == "EXTRACTED"
     assert "algebra" in saved["pages"][0]["text"]
+
+
+def test_service_saves_chunks_with_their_page_numbers(tmp_path):
+    with make_client(tmp_path) as client:
+        service: IngestionService = client.app.state.container.ingestion
+        job = {"item_id": 6, "course_id": 3, "topic_id": 1, "title": "Algebra", "pdf_path": text_pdf(tmp_path / "c.pdf", ["Linear equations are solved step by step.", "Quadratic equations come next."])}
+        service.process(job)
+    saved = json.loads((tmp_path / "chunks" / "6.json").read_text(encoding="utf-8"))
+    assert [c["page_number"] for c in saved] == [1, 2]
+    assert saved[0]["chunk_id"] == "6-0" and saved[0]["course_id"] == 3 and saved[0]["title"] == "Algebra"
+    assert "Quadratic" in saved[1]["text"]

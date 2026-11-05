@@ -25,6 +25,6 @@ def build_container(settings: Settings | None = None) -> Container:
     job_store = JobStore(settings.database_url)
     ocr = TesseractOcr(settings.ocr_language, settings.tesseract_cmd)
     pipeline = PdfPipeline(ocr, settings.ocr_max_pages)
-    ingestion = IngestionService(pipeline, settings.extracted_dir)
+    ingestion = IngestionService(pipeline, settings.extracted_dir, settings.chunks_dir)
     worker = Worker(job_store, process=ingestion.process)
     return Container(settings=settings, job_store=job_store, ocr=ocr, ingestion=ingestion, worker=worker)
