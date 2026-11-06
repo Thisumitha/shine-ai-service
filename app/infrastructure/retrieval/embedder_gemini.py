@@ -20,6 +20,7 @@ class GeminiEmbedder(Embedder):
         client=None,
         model: str = "gemini-embedding-001",
         batch_size: int = 100,
+        api_key: str | None = None,
     ):
         if batch_size <= 0:
             raise ValueError("batch_size must be greater than zero.")
@@ -27,17 +28,26 @@ class GeminiEmbedder(Embedder):
         self.model = model
         self.batch_size = batch_size
 
-        if client is not None:
-            self.client = client
-        else:
-            settings = get_settings()
+        # Keep an injected fake or real client if one was provided.
+        self.client = client
 
-            if not settings.gemini_api_key:
-                raise ValueError("GEMINI_API_KEY is not configured.")
+        # Store the API key without creating the Gemini client yet.
+        if api_key is None:
+            api_key = get_settings().gemini_api_key
 
-            self.client = genai.Client(
-                api_key=settings.gemini_api_key
-            )
+        self.api_key = api_key
+
+    def _get_client(self):
+        """Create the Gemini client only when an embedding is requested."""
+
+        if self.client is not None:
+            return self.client
+
+        if not self.api_key:
+            raise ValueError("GEMINI_API_KEY is not configured.")
+
+        self.client = genai.Client(api_key=self.api_key)
+        return self.client
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         """Convert texts into embedding vectors in batches."""
@@ -72,7 +82,9 @@ class GeminiEmbedder(Embedder):
     def _embed_batch(self, texts: list[str]) -> list[list[float]]:
         """Send one batch to Gemini with automatic retries."""
 
-        response = self.client.models.embed_content(
+        client = self._get_client()
+
+        response = client.models.embed_content(
             model=self.model,
             contents=texts,
         )
@@ -89,4 +101,3 @@ class GeminiEmbedder(Embedder):
             embedding.values
             for embedding in response.embeddings
         ]
-

@@ -1,3 +1,4 @@
+
 from abc import ABC, abstractmethod
 
 
@@ -15,7 +16,19 @@ class VectorStore(ABC):
         ...
 
     @abstractmethod
-    def delete_by_item_id(self, item_id: str) -> None:
+    def replace_item(
+        self,
+        item_id: int,
+        ids: list[str],
+        texts: list[str],
+        embeddings: list[list[float]],
+        metadatas: list[dict],
+    ) -> None:
+        """Replace all indexed chunks belonging to an item."""
+        ...
+
+    @abstractmethod
+    def delete_by_item_id(self, item_id: int) -> None:
         ...
 
     @abstractmethod
