@@ -1,4 +1,4 @@
-from app.domain.entities.chunk import RetrievedChunk
+from app.domain.entities.chunk import Chunk, RetrievedChunk
 from app.domain.entities.citation import Citation
 from app.domain.entities.document import PageContent, ParsedDocument
 from app.domain.entities.feedback import Feedback
@@ -8,6 +8,7 @@ from app.domain.entities.unanswered import UnansweredQuery
 from app.domain.entities.user import CurrentUser
 
 __all__ = [
+    "Chunk",
     "RetrievedChunk",
     "Citation",
     "PageContent",
@@ -18,4 +19,3 @@ __all__ = [
     "UnansweredQuery",
     "CurrentUser",
 ]
-
