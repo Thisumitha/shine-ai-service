@@ -1,13 +1,17 @@
 from dataclasses import dataclass
 
 from app.config import Settings, get_settings
+from app.domain.ports.chat_store import ChatStore
 from app.domain.ports.embedder import Embedder
+from app.domain.ports.llm_client import LLMClient
 from app.domain.ports.ocr_engine import OcrEngine
 from app.domain.ports.retriever import Retriever
 from app.domain.ports.sparse_indexer import SparseIndexer
 from app.domain.ports.vector_store import VectorStore
 from app.infrastructure.ingestion.ocr_tesseract import TesseractOcr
 from app.infrastructure.ingestion.pipeline import PdfPipeline
+from app.infrastructure.llm.gemini_client import GeminiClient
+from app.infrastructure.memory.sqlite_chat_store import SqliteChatStore
 from app.infrastructure.queue.job_store import JobStore
 from app.infrastructure.queue.worker import Worker
 from app.infrastructure.retrieval.dense_index import DenseRetriever
@@ -15,7 +19,10 @@ from app.infrastructure.retrieval.embedder_gemini import GeminiEmbedder
 from app.infrastructure.retrieval.hybrid_retriever import HybridRetriever
 from app.infrastructure.retrieval.sparse_index import SparseIndex
 from app.infrastructure.store.chroma_vector_store import ChromaVectorStore
+from app.services.agent.agent import ChatAgent
+from app.services.answer_service import AnswerService
 from app.services.ingestion_service import IngestionService
+from app.services.self_check_service import SelfCheckService
 
 
 @dataclass(frozen=True)
@@ -29,6 +36,11 @@ class Container:
     retriever: Retriever
     ingestion: IngestionService
     worker: Worker
+    chat_store: ChatStore
+    llm_client: LLMClient
+    answer_service: AnswerService
+    self_check_service: SelfCheckService
+    chat_agent: ChatAgent
 
 
 def build_container(settings: Settings | None = None) -> Container:
@@ -74,6 +86,20 @@ def build_container(settings: Settings | None = None) -> Container:
 
     worker = Worker(job_store, process=ingestion.process)
 
+    # Member 3: Memory, LLM Client, Answer Generator, and Agent
+    chat_store = SqliteChatStore(db_path=settings.sqlite_path)
+    llm_client = GeminiClient(settings=settings)
+    answer_service = AnswerService(llm_client=llm_client)
+    self_check_service = SelfCheckService(llm_client=llm_client, chat_store=chat_store)
+
+    chat_agent = ChatAgent.create(
+        chat_store=chat_store,
+        llm_client=llm_client,
+        retriever=retriever,
+        answer_service=answer_service,
+        self_check_service=self_check_service,
+    )
+
     return Container(
         settings=settings,
         job_store=job_store,
@@ -84,4 +110,9 @@ def build_container(settings: Settings | None = None) -> Container:
         retriever=retriever,
         ingestion=ingestion,
         worker=worker,
+        chat_store=chat_store,
+        llm_client=llm_client,
+        answer_service=answer_service,
+        self_check_service=self_check_service,
+        chat_agent=chat_agent,
     )
