@@ -25,22 +25,27 @@ class GeminiClient(LLMClient):
         settings: Settings,
         client: genai.Client | None = None,
     ):
+        self.settings = settings
         self.model = settings.gemini_model
         self.temperature = settings.gemini_temperature
         self.max_retries = max(1, settings.gemini_max_retries)
-
-        if client is not None:
-            self.client = client
-        else:
-            if not settings.gemini_api_key:
-                raise ValueError("Gemini API key is missing. Set GEMINI_API_KEY in .env.")
-            self.client = genai.Client(api_key=settings.gemini_api_key)
+        self._client = client
 
         # Token and cost tracking (Free Tier = $0.00 cost)
         self.total_prompt_tokens = 0
         self.total_candidates_tokens = 0
         self.total_tokens = 0
         self.estimated_cost_usd = 0.0
+
+    @property
+    def client(self) -> genai.Client:
+        """Create the Gemini client only when a request is made."""
+        if self._client is not None:
+            return self._client
+        if not self.settings.gemini_api_key:
+            raise ValueError("Gemini API key is missing. Set GEMINI_API_KEY in .env.")
+        self._client = genai.Client(api_key=self.settings.gemini_api_key)
+        return self._client
 
     def generate(self, prompt: str, system_instruction: str | None = None) -> str:
         """Generate free-form text response with retries."""
