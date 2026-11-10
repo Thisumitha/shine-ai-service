@@ -96,8 +96,14 @@ class SqliteChatStore(ChatStore):
             if self._mem_conn is None:
                 conn.close()
 
-    def create_session(self, user_id: int | str, course_id: int | str, title: str) -> ChatSession:
-        session_id = str(uuid.uuid4())
+    def create_session(
+        self,
+        user_id: int | str,
+        course_id: int | str,
+        title: str,
+        session_id: str | None = None,
+    ) -> ChatSession:
+        session_id = session_id or str(uuid.uuid4())
         created_at = now_iso()
         updated_at = created_at
         user_id_str = str(user_id)

@@ -11,7 +11,13 @@ class ChatStore(ABC):
     """Abstract port for persisting conversational sessions, messages, feedback, and unanswerable questions."""
 
     @abstractmethod
-    def create_session(self, user_id: int | str, course_id: int | str, title: str) -> ChatSession:
+    def create_session(
+        self,
+        user_id: int | str,
+        course_id: int | str,
+        title: str,
+        session_id: str | None = None,
+    ) -> ChatSession:
         """Create and return a new chat session."""
         ...
 

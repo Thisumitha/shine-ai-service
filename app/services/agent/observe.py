@@ -30,6 +30,7 @@ class ObserveStage:
                     user_id=user_id,
                     course_id=course_id,
                     title="Study Session",
+                    session_id=active_session_id,
                 )
                 return new_session.session_id, []
 
