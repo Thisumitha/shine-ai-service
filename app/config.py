@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     internal_secret: str = ""
     spring_base_url: str = "http://localhost:8080"
     gemini_api_key: str = ""
+    gemini_model: str = "gemini-2.5-flash"
+    gemini_temperature: float = 0.2
+    gemini_max_retries: int = 3
     chroma_dir: str = "./data/chroma"
     sqlite_path: str = "./data/service.sqlite"
     # Job queue database (MySQL). Create it once: CREATE DATABASE shine_ai CHARACTER SET utf8mb4;
