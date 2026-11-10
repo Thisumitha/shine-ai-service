@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.api.routers import chat, feedback, health, internal, parse, sessions
+from app.api.routers import chat, feedback, health, internal, internal_chat, parse, sessions
 from app.config import Settings
 from app.container import Container, build_container
 
@@ -40,6 +40,7 @@ def create_app(
     # Health & Utility
     app.include_router(health.router)
     app.include_router(internal.router)
+    app.include_router(internal_chat.router)
     app.include_router(parse.router)
 
     # Member 3: AI Chat, Sessions & Feedback

@@ -83,12 +83,21 @@ class AnswerService:
             if 0 <= list_index < len(chunks):
                 chunk = chunks[list_index]
                 snippet = chunk.content[:200] + ("..." if len(chunk.content) > 200 else "")
+                course_id_val = None
+                if chunk.course_id is not None:
+                    try:
+                        course_id_val = int(chunk.course_id)
+                    except (ValueError, TypeError):
+                        pass
+
                 citations.append(
                     Citation(
                         source_id=f"S{idx}",
                         file_name=chunk.file_name,
                         page_number=chunk.page_number,
                         snippet=snippet,
+                        course_id=course_id_val,
+                        item_id=chunk.item_id,
                     )
                 )
 

@@ -155,7 +155,47 @@ Submit student feedback (+1 thumbs-up or -1 thumbs-down) for an assistant's resp
 
 ---
 
-### E. Ingestion & Indexing (Internal)
+### E. Spring-Facing Internal Chat
+
+#### `POST /internal/chat`
+Called by the Spring Boot backend when an enrolled student asks a question. Spring handles authentication, verifies student enrollment, and passes authorized course IDs.
+
+- **Headers**: `X-Internal-Secret: <secret>`
+- **Request Body**:
+```json
+{
+  "question": "What is photosynthesis?",
+  "courseIds": [12, 15],
+  "sessionId": "optional-session-id"
+}
+```
+
+- **Response `200 OK`**:
+```json
+{
+  "answer": "Photosynthesis is the process by which green plants convert light into chemical energy.",
+  "sessionId": "f81d4fae-7dec-11d0-a765-00a0c91e6bf6",
+  "sources": [
+    {
+      "courseId": 12,
+      "itemId": 345,
+      "materialTitle": "Biology Notes",
+      "page": 4,
+      "snippet": "Photosynthesis is the process..."
+    }
+  ],
+  "is_refusal": false
+}
+```
+
+- **Notes**:
+  - `courseIds`: Searched in a single call across all courses using the hybrid retriever (`course_ids: set[int]`).
+  - `sessionId`: If omitted in request, a new UUID is generated and returned so Spring can pass it back on subsequent turns.
+  - If no relevant course materials are found, returns HTTP `200 OK` with refusal text in `answer` and an empty `sources: []` list.
+
+---
+
+### F. Ingestion & Indexing (Internal)
 
 #### `POST /internal/index-pdf`
 Trigger asynchronous background PDF parsing, OCR, chunking, and embedding.

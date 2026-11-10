@@ -199,6 +199,8 @@ class SqliteChatStore(ChatStore):
                 "file_name": c.file_name,
                 "page_number": c.page_number,
                 "snippet": c.snippet,
+                "course_id": c.course_id,
+                "item_id": c.item_id,
             }
             for c in citations_list
         ])
@@ -261,6 +263,8 @@ class SqliteChatStore(ChatStore):
                             file_name=item.get("file_name", ""),
                             page_number=item.get("page_number", 0),
                             snippet=item.get("snippet", ""),
+                            course_id=item.get("course_id"),
+                            item_id=item.get("item_id"),
                         )
                         for item in parsed
                     ]
