@@ -9,4 +9,6 @@ class Citation:
     file_name: str
     page_number: int
     snippet: str
+    course_id: int | None = None
+    item_id: int | None = None
 
