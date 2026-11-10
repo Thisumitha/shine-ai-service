@@ -11,7 +11,7 @@ from app.services.agent.reason import (
     INTENT_SMALL_TALK,
     ReasonResult,
 )
-from app.services.answer_service import AnswerService
+from app.services.answer_service import AnswerService, REFUSAL_MESSAGE
 from app.services.self_check_service import SelfCheckService
 
 logger = logging.getLogger(__name__)
@@ -48,6 +48,7 @@ class ActStage:
         query: str,
         reason_result: ReasonResult,
         history: list[Message] | None = None,
+        course_ids: set[int] | list[int] | None = None,
     ) -> tuple[str, list[Citation]]:
         """Execute action and return (final_answer, citations)."""
         intent = reason_result.intent
@@ -64,6 +65,7 @@ class ActStage:
             course_id=course_id,
             query=query,
             history=history or [],
+            course_ids=course_ids,
         )
 
     def _handle_course_content(
@@ -72,23 +74,36 @@ class ActStage:
         course_id: int | str,
         query: str,
         history: list[Message],
+        course_ids: set[int] | list[int] | None = None,
     ) -> tuple[str, list[Citation]]:
         """Coordinate retrieval, answer generation with [S1] tags, and self-check audit."""
-        try:
-            numeric_course_id = int(course_id)
-            course_ids = {numeric_course_id}
-        except (ValueError, TypeError):
-            course_ids = set()
+        target_course_ids: set[int] = set()
+        if course_ids:
+            for cid in course_ids:
+                try:
+                    target_course_ids.add(int(cid))
+                except (ValueError, TypeError):
+                    pass
+        elif course_id is not None:
+            try:
+                target_course_ids.add(int(course_id))
+            except (ValueError, TypeError):
+                pass
+
+        if not target_course_ids:
+            return REFUSAL_MESSAGE, []
 
         # 1. Search via Member 2's abstract Retriever port
         try:
-            raw_results = self.retriever.search(query=query, course_ids=course_ids, top_k=4)
+            raw_results = self.retriever.search(query=query, course_ids=target_course_ids, top_k=4)
         except Exception as exc:
             logger.error("Retriever search failed: %s", exc)
             raw_results = []
 
         # 2. Normalize results into strongly-typed RetrievedChunk objects
         chunks = self._normalize_chunks(raw_results, default_course_id=course_id)
+        if not chunks:
+            return REFUSAL_MESSAGE, []
 
         # 3. Generate candidate answer with citations
         draft_answer, candidate_citations = self.answer_service.answer(
@@ -123,11 +138,16 @@ class ActStage:
                 metadata = item.get("metadata", {})
                 content = item.get("text") or item.get("content", "")
                 chunk_id = str(item.get("id") or metadata.get("chunk_id", ""))
-                file_name = metadata.get("file_name") or metadata.get("title", "Course Document")
+                file_name = metadata.get("title") or metadata.get("file_name", "Course Document")
                 page_number = int(metadata.get("page_number", 1))
                 score = float(item.get("score", 1.0 - float(item.get("distance", 0.0))))
                 heading_path = metadata.get("heading_path", "")
                 c_id = metadata.get("course_id", default_course_id)
+                item_id = metadata.get("item_id")
+                if item_id is None and "-" in chunk_id:
+                    prefix = chunk_id.split("-")[0]
+                    if prefix.isdigit():
+                        item_id = int(prefix)
 
                 normalized.append(
                     RetrievedChunk(
@@ -138,6 +158,7 @@ class ActStage:
                         content=content,
                         score=score,
                         heading_path=heading_path,
+                        item_id=int(item_id) if item_id is not None else None,
                     )
                 )
 

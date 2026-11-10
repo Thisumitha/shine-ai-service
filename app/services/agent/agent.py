@@ -65,15 +65,34 @@ class ChatAgent:
     def handle_message(
         self,
         user_id: int | str,
-        course_id: int | str,
-        message: str,
+        course_id: int | str | None = None,
+        message: str = "",
         session_id: str | None = None,
+        course_ids: set[int] | list[int] | None = None,
     ) -> AgentResponse:
         """Run the complete agent pipeline for an incoming user message."""
+        # Determine effective course ID and set of course IDs
+        effective_course_ids: set[int] = set()
+        if course_ids:
+            for cid in course_ids:
+                try:
+                    effective_course_ids.add(int(cid))
+                except (ValueError, TypeError):
+                    pass
+        elif course_id is not None:
+            try:
+                effective_course_ids.add(int(course_id))
+            except (ValueError, TypeError):
+                pass
+
+        effective_course_id = course_id if course_id is not None else (
+            next(iter(effective_course_ids)) if effective_course_ids else "general"
+        )
+
         # 1. Observe: Load conversation history or create session
         active_session_id, history = self.observe.observe(
             user_id=user_id,
-            course_id=course_id,
+            course_id=effective_course_id,
             session_id=session_id,
         )
 
@@ -92,10 +111,11 @@ class ChatAgent:
         # 3. Act: Retrieval, grounded answer generation, and self-check
         answer, citations = self.act.act(
             user_id=user_id,
-            course_id=course_id,
+            course_id=effective_course_id,
             query=message,
             reason_result=reason_result,
             history=history,
+            course_ids=effective_course_ids,
         )
 
         # 4. Persist: Save user query and assistant answer to SQLite

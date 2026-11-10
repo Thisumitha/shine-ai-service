@@ -31,6 +31,7 @@ class RetrievedChunk:
     content: str
     score: float = 0.0
     heading_path: str = ""
+    item_id: int | None = None
 
     @classmethod
     def from_chunk(cls, chunk: Chunk, score: float = 0.0, heading_path: str = "") -> "RetrievedChunk":
@@ -43,4 +44,5 @@ class RetrievedChunk:
             content=chunk.text,
             score=score,
             heading_path=heading_path,
+            item_id=chunk.item_id,
         )
