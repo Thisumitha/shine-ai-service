@@ -142,6 +142,25 @@ def build_container(settings: Settings | None = None) -> Container:
     answer_service = AnswerService(llm_client=llm_client)
     self_check_service = SelfCheckService(llm_client=llm_client, chat_store=chat_store)
 
+    student_data_stage = None
+    try:
+        from app.infrastructure.clients.spring_student_data import SpringStudentDataClient
+        from app.services.agent.student_data import StudentDataStage
+        from app.services.student_tools import StudentToolService
+
+        student_data_stage = StudentDataStage(
+            llm_client=llm_client,
+            tools=StudentToolService(
+                SpringStudentDataClient(
+                    base_url=settings.spring_base_url,
+                    internal_secret=settings.internal_secret,
+                    timeout_seconds=settings.student_data_timeout_seconds,
+                )
+            ),
+        )
+    except Exception as exc:
+        logger.warning("Student data tools could not be loaded: %s", exc)
+
     chat_agent = None
     if retriever is not None:
         chat_agent = ChatAgent.create(
@@ -150,6 +169,7 @@ def build_container(settings: Settings | None = None) -> Container:
             retriever=retriever,
             answer_service=answer_service,
             self_check_service=self_check_service,
+            student_data_stage=student_data_stage,
         )
 
     return Container(

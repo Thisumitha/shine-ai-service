@@ -17,6 +17,11 @@ class InternalChatRequest(BaseModel):
         alias="sessionId",
         description="Optional session ID for conversational memory across turns",
     )
+    student_email: str | None = Field(
+        default=None,
+        alias="studentEmail",
+        description="Email of the student, verified by Spring from the JWT. Used for personal-record questions",
+    )
 
 
 class InternalSourceSchema(BaseModel):

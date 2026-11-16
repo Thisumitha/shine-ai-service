@@ -9,6 +9,7 @@ from app.services.agent.act import ActStage
 from app.services.agent.observe import ObserveStage
 from app.services.agent.persist import PersistStage
 from app.services.agent.reason import ReasonStage
+from app.services.agent.student_data import StudentDataStage
 from app.services.answer_service import AnswerService
 from app.services.self_check_service import SelfCheckService
 
@@ -49,6 +50,7 @@ class ChatAgent:
         retriever: Retriever,
         answer_service: AnswerService,
         self_check_service: SelfCheckService,
+        student_data_stage: StudentDataStage | None = None,
     ) -> "ChatAgent":
         """Factory method to instantiate ChatAgent with all 4 stages wired cleanly."""
         return cls(
@@ -58,6 +60,7 @@ class ChatAgent:
                 retriever=retriever,
                 answer_service=answer_service,
                 self_check_service=self_check_service,
+                student_data_stage=student_data_stage,
             ),
             persist_stage=PersistStage(chat_store=chat_store),
         )
@@ -69,6 +72,7 @@ class ChatAgent:
         message: str = "",
         session_id: str | None = None,
         course_ids: set[int] | list[int] | None = None,
+        student_email: str | None = None,
     ) -> AgentResponse:
         """Run the complete agent pipeline for an incoming user message."""
         # Determine effective course ID and set of course IDs
@@ -116,6 +120,7 @@ class ChatAgent:
             reason_result=reason_result,
             history=history,
             course_ids=effective_course_ids,
+            student_email=student_email,
         )
 
         # 4. Persist: Save user query and assistant answer to SQLite
