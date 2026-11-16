@@ -33,10 +33,11 @@ def internal_chat_endpoint(
 
     # Spring calls AI service internally, user_id is internal
     result = container.chat_agent.handle_message(
-        user_id="spring_student",
+        user_id=body.student_email or "spring_student",
         message=body.question,
         session_id=body.session_id,
         course_ids=body.course_ids,
+        student_email=body.student_email,
     )
 
     is_refusal = (
