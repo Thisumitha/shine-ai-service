@@ -8,7 +8,8 @@ class Settings(BaseSettings):
 
     jwt_secret: str = ""
     internal_secret: str = ""
-    spring_base_url: str = "http://localhost:8080"
+    # Empty = standalone mode: student questions use sample/student_data.json instead of Spring.
+    spring_base_url: str = ""
     student_data_timeout_seconds: float = 10.0
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.5-flash"
@@ -16,8 +17,8 @@ class Settings(BaseSettings):
     gemini_max_retries: int = 3
     chroma_dir: str = "./data/chroma"
     sqlite_path: str = "./data/service.sqlite"
-    # Job queue database (MySQL). Create it once: CREATE DATABASE shine_ai CHARACTER SET utf8mb4;
-    database_url: str = "mysql+pymysql://root:@localhost:3306/shine_ai"
+    # Job queue database. SQLite by default; use mysql+pymysql://... in production.
+    database_url: str = "sqlite:///./data/jobs.sqlite"
     pdf_dir: str = "./data/pdfs"
     extracted_dir: str = "./data/extracted"
     chunks_dir: str = "./data/chunks"

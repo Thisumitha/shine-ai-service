@@ -144,19 +144,26 @@ def build_container(settings: Settings | None = None) -> Container:
 
     student_data_stage = None
     try:
-        from app.infrastructure.clients.spring_student_data import SpringStudentDataClient
         from app.services.agent.student_data import StudentDataStage
         from app.services.student_tools import StudentToolService
 
+        if settings.spring_base_url:
+            from app.infrastructure.clients.spring_student_data import SpringStudentDataClient
+
+            provider = SpringStudentDataClient(
+                base_url=settings.spring_base_url,
+                internal_secret=settings.internal_secret,
+                timeout_seconds=settings.student_data_timeout_seconds,
+            )
+        else:
+            # Standalone: no Spring, so student questions are answered from sample/student_data.json.
+            from app.infrastructure.clients.mock_student_data import MockStudentDataClient
+
+            provider = MockStudentDataClient()
+
         student_data_stage = StudentDataStage(
             llm_client=llm_client,
-            tools=StudentToolService(
-                SpringStudentDataClient(
-                    base_url=settings.spring_base_url,
-                    internal_secret=settings.internal_secret,
-                    timeout_seconds=settings.student_data_timeout_seconds,
-                )
-            ),
+            tools=StudentToolService(provider),
         )
     except Exception as exc:
         logger.warning("Student data tools could not be loaded: %s", exc)

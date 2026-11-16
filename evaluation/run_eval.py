@@ -1,14 +1,11 @@
 """Ablation benchmark runner for Shine AI Service.
 
 Usage:
-    # Run fast evaluation test suite
-    python -m evaluation.run_eval --mock
-
-    # Run full comparative ablation study
-    python -m evaluation.run_eval --config all --mock
-
-    # Run against live components
+    # Live evaluation against the ingested PDFs (default, needs GEMINI_API_KEY)
     python -m evaluation.run_eval --config hybrid_with_self_check
+
+    # Synthetic smoke test only (numbers are NOT real measurements)
+    python -m evaluation.run_eval --mock
 """
 
 import argparse
@@ -19,6 +16,7 @@ from typing import Any
 
 from app.domain.entities.chunk import RetrievedChunk
 from app.services.answer_service import REFUSAL_MESSAGE
+from evaluation import live_judges
 from evaluation.metrics import (
     EvaluationReport,
     hit_at_k,
@@ -98,6 +96,7 @@ def evaluate_single_query(
     expected_pages = item.get("expected_page_numbers", [])
     is_answerable = item.get("is_answerable", True)
     ground_truth = item.get("ground_truth_answer", "")
+    live_scores: dict[str, float] = {}
 
     if mock or container is None or container.chat_agent is None:
         retriever = MockAblationRetriever(mode=config_name)
@@ -114,19 +113,24 @@ def evaluate_single_query(
             is_refusal = False
             answer = ground_truth
     else:
-        # Live evaluation through ChatAgent
+        # Live evaluation: retrieve, answer through the agent, then score all three RAG metrics.
+        course_id = int(item.get("course_id", 1))
+        hits = container.retriever.search(query=question, course_ids={course_id}, top_k=4)
         result = container.chat_agent.handle_message(
             user_id="eval_runner",
-            course_id=item.get("course_id", 101),
+            course_id=course_id,
             message=question,
         )
         answer = result.answer
-        is_refusal = (
-            "not found in your course material" in answer.lower()
-            or "couldn't find" in answer.lower()
-            or "could not find" in answer.lower()
-        )
-        retrieved_pages = [c.page_number for c in result.citations]
+        is_refusal = answer.strip() == REFUSAL_MESSAGE.strip()
+        retrieved_pages = [h["metadata"].get("page_number") for h in hits]
+        live_scores = {
+            "context_relevance": live_judges.context_relevance(
+                question, [h["text"] for h in hits], container.embedder
+            ),
+            "answer_relevance": live_judges.answer_relevance(question, answer, container.embedder),
+            "groundedness": 1.0 if is_refusal else live_judges.groundedness(answer, hits, container.llm_client),
+        }
 
     # Calculate metrics for this query
     h1 = hit_at_k(retrieved_pages, expected_pages, k=1) if is_answerable else 1.0
@@ -135,7 +139,10 @@ def evaluate_single_query(
     rr = reciprocal_rank(retrieved_pages, expected_pages) if is_answerable else 1.0
     ref_score = refusal_score(is_answerable=is_answerable, is_refusal=is_refusal)
     f1 = token_overlap_f1(answer, ground_truth) if is_answerable else ref_score
-    groundedness = 1.0 if (not is_refusal and h3 > 0.0) or (is_refusal and not is_answerable) else 0.5
+    if live_scores:
+        groundedness = live_scores["groundedness"]
+    else:
+        groundedness = 1.0 if (not is_refusal and h3 > 0.0) or (is_refusal and not is_answerable) else 0.5
 
     return {
         "id": item["id"],
@@ -149,6 +156,9 @@ def evaluate_single_query(
         "refusal_score": ref_score,
         "answer_f1": f1,
         "groundedness": groundedness,
+        "context_relevance": live_scores.get("context_relevance"),
+        "answer_relevance": live_scores.get("answer_relevance"),
+        "answer": answer,
     }
 
 
@@ -156,7 +166,7 @@ def run_evaluation(
     dataset_path: str = "evaluation/dataset.jsonl",
     config_name: str = "hybrid_with_self_check",
     limit: int | None = None,
-    mock: bool = True,
+    mock: bool = False,
 ) -> EvaluationReport:
     """Executes evaluation across all dataset queries for a given configuration."""
     items = load_dataset(dataset_path, limit=limit)
@@ -168,8 +178,9 @@ def run_evaluation(
             from app.container import build_container
             container = build_container()
         except Exception as exc:
-            logger.warning("Could not initialize live container (%s). Using mock mode.", exc)
-            mock = True
+            raise RuntimeError(f"Could not start the live system: {exc}") from exc
+        if container.chat_agent is None:
+            raise RuntimeError("No chat agent: ingest a PDF first (python -m app.cli ingest <pdf>).")
 
     results = []
     for item in items:
@@ -187,6 +198,9 @@ def run_evaluation(
     avg_refusal = sum(r["refusal_score"] for r in results) / total
     avg_groundedness = sum(r["groundedness"] for r in results) / total
     avg_f1 = sum(r["answer_f1"] for r in ans_items) / ans_total
+    live = [r for r in results if r.get("context_relevance") is not None]
+    avg_ctx = sum(r["context_relevance"] for r in live) / len(live) if live else None
+    avg_ans_rel = sum(r["answer_relevance"] for r in live) / len(live) if live else None
 
     return EvaluationReport(
         config_name=config_name,
@@ -198,6 +212,8 @@ def run_evaluation(
         refusal_accuracy=avg_refusal,
         groundedness=avg_groundedness,
         answer_f1=avg_f1,
+        context_relevance=avg_ctx,
+        answer_relevance=avg_ans_rel,
         per_item_results=results,
     )
 
@@ -205,7 +221,7 @@ def run_evaluation(
 def run_ablation_study(
     dataset_path: str = "evaluation/dataset.jsonl",
     limit: int | None = None,
-    mock: bool = True,
+    mock: bool = False,
 ) -> str:
     """Runs all 4 configurations and builds a comparative ablation matrix."""
     configs = ["dense_only", "sparse_only", "hybrid", "hybrid_with_self_check"]
@@ -245,8 +261,8 @@ def main():
     )
     parser.add_argument("--dataset", default="evaluation/dataset.jsonl", help="Path to benchmark dataset")
     parser.add_argument("--limit", type=int, default=None, help="Limit number of queries evaluated")
-    parser.add_argument("--mock", action="store_true", default=True, help="Run with mock components for fast evaluation")
-    parser.add_argument("--no-mock", dest="mock", action="store_false", help="Run against live components")
+    parser.add_argument("--mock", action="store_true", default=False, help="Synthetic smoke test; the numbers are not real")
+    parser.add_argument("--no-mock", dest="mock", action="store_false", help="Run against live components (default)")
     parser.add_argument("--output", default=None, help="File to save Markdown report")
 
     args = parser.parse_args()

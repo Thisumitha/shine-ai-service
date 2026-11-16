@@ -48,8 +48,15 @@ def build_mcp_server(tools: StudentToolService) -> FastMCP:
 
 if __name__ == "__main__":
     from app.config import get_settings
-    from app.infrastructure.clients.spring_student_data import SpringStudentDataClient
 
     settings = get_settings()
-    provider = SpringStudentDataClient(settings.spring_base_url, settings.internal_secret)
+    if settings.spring_base_url:
+        from app.infrastructure.clients.spring_student_data import SpringStudentDataClient
+
+        provider = SpringStudentDataClient(settings.spring_base_url, settings.internal_secret)
+    else:
+        from app.infrastructure.clients.mock_student_data import MockStudentDataClient
+
+        provider = MockStudentDataClient()
+        os.environ.setdefault("MCP_STUDENT_EMAIL", "demo.student@shine.lk")
     build_mcp_server(StudentToolService(provider)).run()

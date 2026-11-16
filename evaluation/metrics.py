@@ -75,6 +75,8 @@ class EvaluationReport:
     refusal_accuracy: float
     groundedness: float
     answer_f1: float
+    context_relevance: float | None = None
+    answer_relevance: float | None = None
     per_item_results: list[dict[str, Any]] = field(default_factory=list)
 
     def to_markdown(self) -> str:
@@ -90,6 +92,33 @@ class EvaluationReport:
             f"| **MRR** (Mean Reciprocal Rank) | {self.mrr:.3f} | &ge; 0.750 |\n"
             f"| **Refusal Accuracy** | {self.refusal_accuracy * 100:.1f}% | &ge; 90.0% |\n"
             f"| **Groundedness** (Entailment) | {self.groundedness * 100:.1f}% | &ge; 90.0% |\n"
-            f"| **Answer Relevance (F1)** | {self.answer_f1 * 100:.1f}% | &ge; 70.0% |\n"
+            f"| **Answer F1 vs ground truth** | {self.answer_f1 * 100:.1f}% | &ge; 70.0% |\n"
+            + self._live_rows()
+            + self._per_query_table()
         )
+
+    def _live_rows(self) -> str:
+        if self.context_relevance is None:
+            return "\n_Synthetic run (mock): the numbers above are not real measurements._\n"
+        return (
+            f"| **Context Relevance** (cosine, question vs chunks) | {self.context_relevance:.3f} | &ge; 0.600 |\n"
+            f"| **Answer Relevance** (cosine, question vs answer) | {self.answer_relevance:.3f} | &ge; 0.600 |\n"
+        )
+
+    def _per_query_table(self) -> str:
+        rows = [r for r in self.per_item_results if r.get("context_relevance") is not None]
+        if not rows:
+            return ""
+        lines = [
+            "\n#### Per-query scores\n",
+            "| Question | Answer | Context Rel. | Groundedness | Answer Rel. |",
+            "| :--- | :--- | :---: | :---: | :---: |",
+        ]
+        for r in rows:
+            answer = " ".join(r["answer"].split())[:90].replace("|", "/")
+            lines.append(
+                f"| {r['question'][:70]} | {answer} | {r['context_relevance']:.2f} | "
+                f"{r['groundedness']:.2f} | {r['answer_relevance']:.2f} |"
+            )
+        return "\n".join(lines) + "\n"
 

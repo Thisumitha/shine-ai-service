@@ -105,6 +105,9 @@ class HybridRetriever(Retriever):
             if "score" in result:
                 combined[chunk_id]["sparse_score"] = result["score"]
 
+            if "math" in result:
+                combined[chunk_id]["sparse_math"] = result["math"]
+
         # Return the highest RRF scores first.
         results = sorted(
             combined.values(),
