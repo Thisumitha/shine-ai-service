@@ -1,0 +1,17 @@
+{
+  "demo.student@shine.lk": {
+    "timetable": [
+      {"className": "Business Studies - Product Design", "eventType": "CLASS", "dayOffset": 1, "startTime": "09:00", "endTime": "11:00", "status": "SCHEDULED"},
+      {"className": "Data Science with Python", "eventType": "CLASS", "dayOffset": 2, "startTime": "14:00", "endTime": "16:00", "status": "SCHEDULED"},
+      {"className": "Business Studies Mid Exam", "eventType": "EXAM", "dayOffset": 9, "startTime": "10:00", "endTime": "12:00", "status": "SCHEDULED"}
+    ],
+    "invoices": [
+      {"invoiceNumber": "INV-1001", "totalAmount": 5000.0, "paymentStatus": "PAID", "dueDate": "2026-10-05", "paidAt": "2026-10-03"},
+      {"invoiceNumber": "INV-1002", "totalAmount": 5000.0, "paymentStatus": "PENDING", "dueDate": "2026-11-05", "paidAt": null}
+    ],
+    "attendance": [
+      {"courseName": "Business Studies", "attendancePercentage": 92.0, "attendedClasses": 23, "totalClasses": 25},
+      {"courseName": "Data Science with Python", "attendancePercentage": 45.0, "attendedClasses": 9, "totalClasses": 20}
+    ]
+  }
+}
