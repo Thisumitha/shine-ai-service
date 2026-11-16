@@ -9,8 +9,10 @@ from app.services.agent.reason import (
     INTENT_COURSE_CONTENT,
     INTENT_OFF_TOPIC,
     INTENT_SMALL_TALK,
+    INTENT_STUDENT_DATA,
     ReasonResult,
 )
+from app.services.agent.student_data import StudentDataStage
 from app.services.answer_service import AnswerService, REFUSAL_MESSAGE
 from app.services.self_check_service import SelfCheckService
 
@@ -36,7 +38,9 @@ class ActStage:
         retriever: Retriever,
         answer_service: AnswerService,
         self_check_service: SelfCheckService,
+        student_data_stage: StudentDataStage | None = None,
     ) -> None:
+        self.student_data_stage = student_data_stage
         self.retriever = retriever
         self.answer_service = answer_service
         self.self_check_service = self_check_service
@@ -49,6 +53,7 @@ class ActStage:
         reason_result: ReasonResult,
         history: list[Message] | None = None,
         course_ids: set[int] | list[int] | None = None,
+        student_email: str | None = None,
     ) -> tuple[str, list[Citation]]:
         """Execute action and return (final_answer, citations)."""
         intent = reason_result.intent
@@ -58,6 +63,9 @@ class ActStage:
 
         if intent == INTENT_OFF_TOPIC:
             return OFF_TOPIC_REPLY, []
+
+        if intent == INTENT_STUDENT_DATA and self.student_data_stage is not None:
+            return self.student_data_stage.answer(student_email, query, history), []
 
         # Default / COURSE_CONTENT path:
         return self._handle_course_content(

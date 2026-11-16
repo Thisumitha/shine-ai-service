@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     jwt_secret: str = ""
     internal_secret: str = ""
     spring_base_url: str = "http://localhost:8080"
+    student_data_timeout_seconds: float = 10.0
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.5-flash"
     gemini_temperature: float = 0.2
