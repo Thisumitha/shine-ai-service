@@ -25,6 +25,7 @@ class AgentResponse:
     session_id: str
     message_id: str
     intent: str
+    reason: str = ""
 
 
 class ChatAgent:
@@ -137,5 +138,6 @@ class ChatAgent:
             session_id=active_session_id,
             message_id=saved_msg.message_id,
             intent=reason_result.intent,
+            reason=reason_result.reason,
         )
 
