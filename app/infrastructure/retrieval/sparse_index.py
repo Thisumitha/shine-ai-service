@@ -3,8 +3,8 @@ import json
 from dataclasses import asdict
 from pathlib import Path
 
+import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
 
 from app.domain.entities.chunk import Chunk
 from app.domain.ports.sparse_indexer import SparseIndexer
@@ -20,11 +20,15 @@ class SparseIndex(SparseIndexer):
             lowercase=True,
             stop_words=None,
             ngram_range=(1, 2),
+            # Keep the raw TF-IDF weights so vector magnitudes are visible.
+            # Cosine is computed explicitly in search(): dot / (|q| * |d|).
+            norm=None,
         )
 
         self._chunks: dict[str, dict] = {}
         self._records: list[dict] = []
         self._matrix = None
+        self._doc_norms = None
 
         self._load_chunks()
 
@@ -74,6 +78,7 @@ class SparseIndex(SparseIndexer):
 
         if not self._records:
             self._matrix = None
+            self._doc_norms = None
             return
 
         texts = [
@@ -83,10 +88,15 @@ class SparseIndex(SparseIndexer):
 
         try:
             self._matrix = self.vectorizer.fit_transform(texts)
+            # |d| = sqrt(sum of squared TF-IDF weights) for every chunk.
+            self._doc_norms = np.sqrt(
+                np.asarray(self._matrix.multiply(self._matrix).sum(axis=1)).ravel()
+            )
         except ValueError:
             # Handle chunks that contain no valid TF-IDF terms.
             self._records = []
             self._matrix = None
+            self._doc_norms = None
 
     def index_item(
         self,
@@ -169,10 +179,16 @@ class SparseIndex(SparseIndexer):
         except ValueError:
             return []
 
-        similarities = cosine_similarity(
-            query_vector,
-            self._matrix,
-        ).flatten()
+        # Dot product of the query with every chunk, then normalise by both magnitudes.
+        dots = np.asarray((self._matrix @ query_vector.T).todense()).ravel()
+        query_norm = float(np.sqrt(query_vector.multiply(query_vector).sum()))
+        denominators = self._doc_norms * query_norm
+        similarities = np.divide(
+            dots,
+            denominators,
+            out=np.zeros_like(dots, dtype=float),
+            where=denominators > 0,
+        )
 
         results = []
 
@@ -205,6 +221,12 @@ class SparseIndex(SparseIndexer):
                 "text": record["text"],
                 "metadata": metadata,
                 "score": float(score),
+                "math": {
+                    "dot_product": float(dots[index]),
+                    "query_magnitude": query_norm,
+                    "chunk_magnitude": float(self._doc_norms[index]),
+                    "cosine": float(score),
+                },
             })
 
         results.sort(
@@ -215,3 +237,40 @@ class SparseIndex(SparseIndexer):
         )
 
         return results[:top_k]
+
+    def explain_terms(self, query: str, chunk_id: str, top_n: int = 5) -> list[dict]:
+        """Terms that contribute most to the dot product between a query and one chunk.
+
+        Each term shows its IDF and its TF-IDF weight in the query and in the chunk;
+        the dot product is the sum of the per-term products.
+        """
+
+        if self._matrix is None:
+            return []
+
+        index = next(
+            (i for i, record in enumerate(self._records) if record["chunk_id"] == chunk_id),
+            None,
+        )
+        if index is None:
+            return []
+
+        query_vector = self.vectorizer.transform([query.strip()])
+        chunk_vector = self._matrix[index]
+        shared = set(query_vector.indices) & set(chunk_vector.indices)
+        terms = self.vectorizer.get_feature_names_out()
+        query_row = dict(zip(query_vector.indices, query_vector.data))
+        chunk_row = dict(zip(chunk_vector.indices, chunk_vector.data))
+
+        rows = [
+            {
+                "term": str(terms[t]),
+                "idf": float(self.vectorizer.idf_[t]),
+                "query_weight": float(query_row[t]),
+                "chunk_weight": float(chunk_row[t]),
+                "product": float(query_row[t] * chunk_row[t]),
+            }
+            for t in shared
+        ]
+        rows.sort(key=lambda row: -row["product"])
+        return rows[:top_n]
