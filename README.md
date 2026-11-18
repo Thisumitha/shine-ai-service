@@ -63,11 +63,12 @@ What you should see:
 1. `load-sample` prints `[INGEST] ...` and a line like `22 chunks (pages 1-18) embedded into Chroma and indexed with TF-IDF`.
 2. `ask` prints these blocks in order:
    - `[OBSERVE]` your question
-   - `[REASON]` the intent the system decided on
-   - `[RETRIEVE]` the retrieved chunks **before** any answer, each with its scores
-   - `[ACT]` then `[ANSWER]` with the source page
+   - `[REASON]` the intent the system decided on, and `[PLAN]` when a multi-part question was split into several searches
+   - `[RETRIEVE]` the chunks each search returned **before** any answer, with RRF, dense and TF-IDF scores
+   - `[LOOP]` / `[CHECK]` retries (a rewritten query) and the self-check verdict
+   - `[ANSWER]` with the source pages
    - `[PERSIST]` the conversation was saved
-3. `eval` prints a table with Context Relevance, Answer Relevance and Groundedness, then a per-question table. Remove `--limit 5` to run all 16 questions.
+3. `eval` shows each question as it runs (pages retrieved versus expected, a short answer, and its scores), then a summary table with Context Relevance, Answer Relevance and Groundedness. Library log lines are hidden; set `SHINE_DEBUG=1` to see them. Remove `--limit 5` to run all 16 questions. `python -m app.cli eval --config all` runs the four ablation configurations (dense only, TF-IDF only, hybrid, hybrid + self-check), each with its own retriever.
 
 ## 3. Test with your own PDFs
 
@@ -106,7 +107,7 @@ python -m app.cli ask "Your question about the PDF here" --show-math
 2. Edit it. One line is one question:
 
 ```json
-{"id": "q1", "course_id": 1, "question": "What is X?", "ground_truth_answer": "X is ...", "expected_source_doc": "notes.pdf", "expected_page_numbers": [3], "is_answerable": true}
+{"id": "q1", "course_id": 1, "question": "What is X?", "ground_truth_answer": "X is ...", "ground_truth_context": "the passage that states it", "expected_source_doc": "notes.pdf", "expected_page_numbers": [3], "is_answerable": true}
 ```
 - `course_id` must be `1`, the same course the `ingest` command used by default. If you ingest with `--course 7`, use `7` here and in `ask --course 7`.
 - `expected_page_numbers`: the page(s) where the answer is. Used for Hit@k and MRR.
@@ -121,14 +122,63 @@ python -m app.cli eval --dataset my_questions.jsonl --output report.md
 | :--- | :--- |
 | Context Relevance | how close the retrieved chunks are to the question (cosine of embeddings, 0 to 1) |
 | Answer Relevance | how close the answer is to the question (cosine of embeddings, 0 to 1) |
-| Groundedness | an LLM judge checks each claim of the answer against the retrieved chunks (0 to 1) |
+| Groundedness | an LLM judge splits the answer into claims and marks each supported or not by the retrieved chunks; score = supported / total (refusals make no claims, so they are reported as the false refusal rate instead) |
+| Context Recall | share of the ground-truth passage (`ground_truth_context`) found in the retrieved chunks |
 | Hit@k, MRR | whether the expected page was in the top k chunks |
 | Refusal accuracy | unanswerable questions refused, answerable ones answered |
 | Answer F1 | word overlap with your ground-truth answer |
 
 `--mock` gives made-up numbers for a quick smoke test. The report says so. Never use it for results.
 
-## 5. Student questions via MCP (mock data)
+## 5. Check that tables (and OCR) are read correctly
+
+`sample/sample-tables.pdf` has 9 tables (pages 1-3) with known contents, written by hand in `evaluation/sample_tables_truth.json`. The check reads them two ways and scores both against that ground truth:
+
+| Mode | What happens |
+| :--- | :--- |
+| `native` | the PDF's own text layer, tables found by pdfplumber (also proves the ground truth is right) |
+| `ocr` | the same pages are turned into **pictures** (no text layer), then read with Tesseract OCR |
+
+**Needs:** the venv from step 1 and Tesseract installed (Windows: the UB Mannheim build). If `tesseract` is not on PATH, set `TESSERACT_CMD=C:\Program Files\Tesseract-OCR\tesseract.exe` in `.env`. The Windows install folder is also tried automatically. No Gemini key or internet is needed.
+
+**Run the automatic test**
+```bash
+pytest tests/test_sample_tables_ocr.py -v -s
+```
+`-s` prints the score tables. The OCR tests are skipped (with a reason) when Tesseract cannot be found.
+
+**Run the report on any PDF**
+```bash
+python -m evaluation.table_fidelity                      # native + OCR on sample/sample-tables.pdf
+python -m evaluation.table_fidelity --mode ocr           # OCR only
+python -m evaluation.table_fidelity --pdf "C:\my_pdfs\other.pdf"   # your own PDF (edit the truth file to match)
+```
+
+**How to read the scores**
+
+| Column | Meaning |
+| :--- | :--- |
+| Cell recall | share of the expected cells found on the page (a misread number lowers it) |
+| Row integrity | share of expected rows whose cells all sit on **one** row (a table row, or one line of text). This is the one that fails when OCR reads a table column by column |
+| Rows intact after chunking | share of expected rows that are whole inside a single chunk after chunking |
+
+The test passes when OCR cell recall is at least 90% for every table and mean row integrity is at least 85%.
+
+**Result on the sample (Tesseract 5.4, 200 dpi)**
+
+| | Cell recall | Row integrity |
+| :--- | :---: | :---: |
+| native | 100% | 100% |
+| OCR, plain Tesseract text (before the table reader) | 96% | 62% |
+| OCR with the table reader (`ocr_tables.py`) | 100% | 98% |
+
+The one split row is an OCR character error (`11` read as `el`), not a layout error. OCR is not perfect: a different scan resolution changes which digits are misread (300 dpi was worse than 200 on this sample), so check numbers in important tables.
+
+**Test your own table:** copy a table into `evaluation/sample_tables_truth.json` (page number, name, rows of cells), then run the command above with `--pdf`.
+
+**Limits:** the table reader (`app/infrastructure/ingestion/ocr_tables.py`) rebuilds tables from word positions. It handles ruled and well-aligned tables with at least 3 rows. Merged cells, rotated tables and text laid out in two columns can still be misread. Only English OCR data is installed by default.
+
+## 6. Student questions via MCP (mock data)
 
 Questions about a student's timetable, invoices and attendance go to student-data tools (`app/services/student_tools.py`), also available as an MCP server. In standalone mode they read **mock data** from `sample/student_data.json` for the student `demo.student@shine.lk`. Nothing is sent to any other system.
 
@@ -140,7 +190,7 @@ python -m app.cli mcp
 ```
 The last command starts the MCP server (it waits for an MCP client such as the MCP Inspector; press Ctrl+C to stop).
 
-## 6. Command summary
+## 7. Command summary
 
 | Command | What it does |
 | :--- | :--- |
@@ -149,9 +199,11 @@ The last command starts the MCP server (it waits for an MCP client such as the M
 | `python -m app.cli ask "<question>" [--show-math] [--course N]` | answer with retrieval details |
 | `python -m app.cli eval [--dataset file] [--limit N] [--output file]` | score the system |
 | `python -m app.cli mcp` | start the student-data MCP server |
+| `pytest tests/test_sample_tables_ocr.py -v -s` | check OCR and table extraction on `sample/sample-tables.pdf` |
+| `python -m evaluation.table_fidelity [--mode native\|ocr] [--pdf file]` | table fidelity report |
 | `python -m app.cli reset` | delete everything in `data/` |
 
-## 7. Troubleshooting
+## 8. Troubleshooting
 
 | Message or problem | Fix |
 | :--- | :--- |
@@ -160,11 +212,12 @@ The last command starts the MCP server (it waits for an MCP client such as the M
 | `No PDF found at ...` | check the path, use double quotes, the file must end in `.pdf` |
 | 429 / quota / rate limit errors | wait a minute and retry, or use `--limit 5` for `eval`; free Gemini keys have limits |
 | Answer is "not found in your course material" | the PDFs do not contain it, or the PDF is scanned (needs Tesseract, set `TESSERACT_CMD` in `.env`) |
+| OCR table test says `Tesseract is not installed` | install Tesseract and set `TESSERACT_CMD` in `.env` |
 | `python` not found | on macOS/Linux use `python3`; on Windows reinstall Python and tick "Add to PATH" |
 | `No module named ...` | the venv is not active: run the activate command again |
 | Old results in the answers | `python -m app.cli reset`, then ingest again |
 
-## 8. How it works
+## 9. How it works
 
 ```
 PDF -> extract (PyMuPDF text, Tesseract OCR for scans, pdfplumber tables)
@@ -181,13 +234,13 @@ question -> Observe -> Reason -> Act -> Persist
 
 - `app/domain`: interfaces (ports). `app/infrastructure`: Chroma, Gemini, TF-IDF, OCR. `app/services`: ingestion, answer, self-check and the agent stages. `app/container.py`: dependency injection. `evaluation/`: metrics and runner. More detail in `docs/`.
 - Sparse search uses `TfidfVectorizer(norm=None)`; the dot product, magnitudes and cosine are computed explicitly in `app/infrastructure/retrieval/sparse_index.py`.
-- The agent loop is one staged pass (Observe, Reason, Act, Persist), not an open-ended multi-step planner.
+- The agent loop is Observe -> Reason -> Act -> Persist, where Act is a bounded loop (`MAX_ATTEMPTS = 2` in `app/services/agent/act.py`). Reason can split a multi-part question into up to 3 searches. If nothing is retrieved, or the self-check rejects the answer, the agent rewrites the query and tries once more, then refuses instead of guessing. Every turn returns an `AgentTrace` (`app/services/agent/state.py`) with the searches, scores, retries and self-check verdict.
 
-## 9. Optional: Spring backend
+## 10. Optional: Spring backend
 
 Set `SPRING_BASE_URL` and `INTERNAL_SECRET` in `.env` to read real student records and to use the web API (`uvicorn app.main:app`). See `docs/API_REFERENCE.md` and `docs/STUDENT_MCP.md`. Not needed for any step above.
 
-## 10. For the submission
+## 11. For the submission
 
 Send: the source code, `requirements.txt`, `.env.example`, this README, the GitHub link, the report and the video link.
 **Do not send** your `venv` folder (huge and tied to your computer), your real `.env` (contains your private key), `data/`, `__pycache__/` or `.git/`.

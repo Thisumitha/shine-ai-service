@@ -39,7 +39,7 @@ The retrieval engine provides relevant course context chunks for user queries. B
 ### A. Embedder (`GeminiEmbedder`)
 - **Location**: `app/infrastructure/retrieval/embedder_gemini.py`
 - **Port Implemented**: `app.domain.ports.embedder.Embedder`
-- **Model**: `text-embedding-004` (via `google-genai` SDK).
+- **Model**: `gemini-embedding-001` by default (via `google-genai` SDK); set `GEMINI_EMBEDDING_MODEL` in `.env` to change it, then re-ingest.
 - Generates 768-dimensional dense vectors for both document chunks and incoming user queries.
 - Batched embedding generation during PDF indexing.
 

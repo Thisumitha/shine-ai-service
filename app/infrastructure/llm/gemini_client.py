@@ -10,6 +10,7 @@ import httpx
 
 from app.config import Settings
 from app.domain.ports.llm_client import LLMClient
+from app.infrastructure.network_errors import is_network_error
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +123,9 @@ class GeminiClient(LLMClient):
                 )
                 self._record_usage(response)
                 return response
-            except (errors.APIError, httpx.HTTPError) as err:
+            except Exception as err:
+                if not (isinstance(err, errors.APIError) or is_network_error(err)):
+                    raise  # a bug or bad input, not a Gemini or network failure
                 last_exception = err
                 is_transient = self._is_transient_error(err)
                 if not is_transient or attempt >= self.max_retries:
@@ -172,9 +175,7 @@ class GeminiClient(LLMClient):
             code = getattr(err, "code", None)
             if code in (429, 500, 502, 503, 504):
                 return True
-        if isinstance(err, (httpx.TimeoutException, httpx.ConnectError, httpx.NetworkError)):
-            return True
-        return False
+        return is_network_error(err)
 
     @staticmethod
     def _strip_markdown_code_fences(text: str) -> str:

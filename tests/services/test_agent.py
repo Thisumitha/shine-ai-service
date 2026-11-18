@@ -237,3 +237,145 @@ def test_agent_session_continuity():
     history = store.get_history(session_id)
     assert len(history) == 4
 
+
+
+# --- Agentic loop: planning, bounded retry, trace -------------------------------------------
+
+
+class SequenceRetriever(Retriever):
+    """Returns a different canned result list on each call and records every query."""
+
+    def __init__(self, *results: list[dict]) -> None:
+        self.results = list(results)
+        self.queries: list[str] = []
+
+    def search(self, query: str, course_ids: set[int], top_k: int) -> list[dict]:
+        self.queries.append(query)
+        return self.results.pop(0) if self.results else []
+
+
+def _hit(chunk_id: str, page: int, text: str = "Binary search halves the interval.") -> dict:
+    return {
+        "id": chunk_id,
+        "text": text,
+        "score": 0.03,
+        "dense_rank": 1,
+        "sparse_rank": 2,
+        "dense_distance": 0.2,
+        "sparse_math": {"dot_product": 1.0, "query_magnitude": 2.0, "chunk_magnitude": 3.0, "cosine": 0.17},
+        "metadata": {"title": "algorithms.pdf", "page_number": page, "course_id": 101},
+    }
+
+
+def _build_agent(retriever: Retriever, mock_llm: MagicMock, store: SqliteChatStore) -> ChatAgent:
+    return ChatAgent.create(
+        chat_store=store,
+        llm_client=mock_llm,
+        retriever=retriever,
+        answer_service=AnswerService(llm_client=mock_llm),
+        self_check_service=SelfCheckService(llm_client=mock_llm, chat_store=store),
+    )
+
+
+def _reason_json(sub_queries: list[str] | None = None) -> str:
+    return json.dumps({
+        "intent": "COURSE_CONTENT",
+        "reason": "course question",
+        "search_needed": True,
+        "sub_queries": sub_queries or [],
+    })
+
+
+GROUNDED = json.dumps({"grounded": True, "score": 0.95, "unsupported_claims": []})
+UNGROUNDED = json.dumps({"grounded": False, "score": 0.2, "unsupported_claims": ["x"]})
+
+
+def test_multi_part_question_is_planned_into_separate_searches():
+    store = SqliteChatStore(db_path=":memory:")
+    mock_llm = MagicMock(spec=LLMClient)
+    mock_llm.generate_json.side_effect = [_reason_json(["what is binary search", "what is linear search"]), GROUNDED]
+    mock_llm.generate.return_value = "Binary search halves the range [S1]; linear search scans [S2]."
+    retriever = SequenceRetriever([_hit("1-1", 3)], [_hit("1-2", 5)])
+
+    response = _build_agent(retriever, mock_llm, store).handle_message(
+        user_id="u", course_id=101, message="Compare binary and linear search"
+    )
+
+    assert retriever.queries == ["what is binary search", "what is linear search"]
+    assert [s.sub_query for s in response.trace.steps] == retriever.queries
+    assert response.trace.sub_queries == retriever.queries
+    assert response.trace.grounded is True
+    assert response.trace.attempts == 1
+    assert {c.page_number for c in response.citations} == {3, 5}
+
+
+def test_trace_keeps_retrieval_scores_and_math():
+    store = SqliteChatStore(db_path=":memory:")
+    mock_llm = MagicMock(spec=LLMClient)
+    mock_llm.generate_json.side_effect = [_reason_json(), GROUNDED]
+    mock_llm.generate.return_value = "It halves the interval [S1]."
+
+    response = _build_agent(SequenceRetriever([_hit("1-1", 3)]), mock_llm, store).handle_message(
+        user_id="u", course_id=101, message="How does binary search work?"
+    )
+
+    hit = response.trace.steps[0].hits[0]
+    assert (hit.rrf_score, hit.dense_rank, hit.sparse_rank, hit.dense_distance) == (0.03, 1, 2, 0.2)
+    assert hit.sparse_math["cosine"] == 0.17
+
+
+def test_retries_with_rewritten_query_when_nothing_is_retrieved():
+    store = SqliteChatStore(db_path=":memory:")
+    mock_llm = MagicMock(spec=LLMClient)
+    mock_llm.generate_json.side_effect = [_reason_json(), GROUNDED]
+    # first generate() call is the query rewrite, second is the answer
+    mock_llm.generate.side_effect = ["binary search algorithm halving interval", "It halves the interval [S1]."]
+    retriever = SequenceRetriever([], [_hit("1-1", 3)])
+
+    response = _build_agent(retriever, mock_llm, store).handle_message(
+        user_id="u", course_id=101, message="how does the thing that splits in two work"
+    )
+
+    assert retriever.queries == ["how does the thing that splits in two work", "binary search algorithm halving interval"]
+    assert response.trace.attempts == 2
+    assert response.citations[0].page_number == 3
+    assert any("rewritten" in n for n in response.trace.notes)
+
+
+def test_retries_after_self_check_rejects_the_first_answer():
+    store = SqliteChatStore(db_path=":memory:")
+    mock_llm = MagicMock(spec=LLMClient)
+    mock_llm.generate_json.side_effect = [_reason_json(), UNGROUNDED, GROUNDED]
+    # answer, rewrite, answer
+    mock_llm.generate.side_effect = ["Unsupported claim [S1].", "binary search halving", "It halves the interval [S1]."]
+    retriever = SequenceRetriever([_hit("1-1", 3)], [_hit("1-2", 4)])
+
+    response = _build_agent(retriever, mock_llm, store).handle_message(
+        user_id="u", course_id=101, message="How does binary search work?"
+    )
+
+    assert response.answer == "It halves the interval [S1]."
+    assert response.trace.attempts == 2
+    assert response.trace.grounded is True
+
+
+def test_refuses_after_max_attempts_when_every_answer_is_rejected():
+    store = SqliteChatStore(db_path=":memory:")
+    mock_llm = MagicMock(spec=LLMClient)
+    mock_llm.generate_json.side_effect = [_reason_json(), UNGROUNDED, UNGROUNDED]
+    mock_llm.generate.side_effect = ["Bad [S1].", "rewritten query", "Still bad [S1]."]
+    retriever = SequenceRetriever([_hit("1-1", 3)], [_hit("1-2", 4)])
+
+    response = _build_agent(retriever, mock_llm, store).handle_message(
+        user_id="u", course_id=101, message="How does binary search work?"
+    )
+
+    assert response.answer == REFUSAL_MESSAGE
+    assert response.trace.attempts == 2  # bounded: no third try
+    assert response.trace.grounded is False
+
+
+def test_single_part_question_ignores_a_one_item_plan():
+    assert ReasonStage._clean_sub_queries(["only one"], "COURSE_CONTENT") == ()
+    assert ReasonStage._clean_sub_queries(["a", "A", "b", "c", "d"], "COURSE_CONTENT") == ("a", "b", "c")
+    assert ReasonStage._clean_sub_queries(["a", "b"], "SMALL_TALK") == ()

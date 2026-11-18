@@ -87,7 +87,7 @@ Final Response
 
 - **Location**: `app/infrastructure/llm/gemini_client.py`
 - **Port Implemented**: `app.domain.ports.llm_client.LLMClient`
-- **Model**: `gemini-2.5-flash` (free tier, zero cost).
+- **Model**: `gemini-3.8-flash` by default (set with GEMINI_MODEL; older names such as gemini-2.5-flash return 404 for new keys).
 - **Resilience**: Exponential backoff retry loop with jitter handling rate limits (`HTTP 429`) and temporary outages (`HTTP 503`).
 - **Structured Outputs**: Native JSON mode with automated markdown fence stripping (````json ... ````).
 - **Cost & Token Tracking**: Tracks cumulative input, output, and cached tokens per session.

@@ -14,19 +14,38 @@ import logging
 from pathlib import Path
 from typing import Any
 
+import time
+
 from app.domain.entities.chunk import RetrievedChunk
+from app.logging_setup import quiet_libraries
+from app.services.agent.act import ActStage
 from app.services.answer_service import REFUSAL_MESSAGE
-from evaluation import live_judges
+from evaluation import console, live_judges
 from evaluation.metrics import (
     EvaluationReport,
+    context_recall,
     hit_at_k,
     reciprocal_rank,
     refusal_score,
     token_overlap_f1,
 )
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+quiet_libraries()  # no HTTP log lines; the console view below shows the progress instead
 logger = logging.getLogger("evaluator")
+
+
+EVAL_TOP_K = 5  # Hit@5 needs five retrieved chunks
+
+
+def _retriever_for(config_name: str, container: Any) -> Any:
+    """The retriever an ablation configuration measures."""
+    chosen = {
+        "dense_only": container.dense_retriever,
+        "sparse_only": container.sparse_indexer,
+    }.get(config_name, container.retriever)
+    if chosen is None:
+        raise RuntimeError(f"The '{config_name}' retriever is not available (check that PDFs are ingested).")
+    return chosen
 
 
 def load_dataset(dataset_path: str, limit: int | None = None) -> list[dict[str, Any]]:
@@ -97,8 +116,9 @@ def evaluate_single_query(
     is_answerable = item.get("is_answerable", True)
     ground_truth = item.get("ground_truth_answer", "")
     live_scores: dict[str, float] = {}
+    live = not (mock or container is None or container.chat_agent is None)
 
-    if mock or container is None or container.chat_agent is None:
+    if not live:
         retriever = MockAblationRetriever(mode=config_name)
         chunks = retriever.search(question, expected_pages, is_answerable)
         retrieved_pages = [c.page_number for c in chunks]
@@ -113,24 +133,33 @@ def evaluate_single_query(
             is_refusal = False
             answer = ground_truth
     else:
-        # Live evaluation: retrieve, answer through the agent, then score all three RAG metrics.
+        # Live evaluation: retrieve with the retriever this configuration names, answer, then score.
         course_id = int(item.get("course_id", 1))
-        hits = container.retriever.search(query=question, course_ids={course_id}, top_k=4)
-        result = container.chat_agent.handle_message(
-            user_id="eval_runner",
-            course_id=course_id,
-            message=question,
-        )
-        answer = result.answer
+        hits = _retriever_for(config_name, container).search(query=question, course_ids={course_id}, top_k=EVAL_TOP_K)
+        if config_name == "hybrid_with_self_check":
+            # the full agent: plan, retrieve, answer, self-check, bounded retry
+            answer = container.chat_agent.handle_message(
+                user_id="eval_runner", course_id=course_id, message=question
+            ).answer
+        else:
+            # same generation step, but no self-check verifier
+            chunks = ActStage._normalize_chunks(hits[:4], default_course_id=course_id)
+            answer = container.answer_service.answer(query=question, chunks=chunks)[0] if chunks else REFUSAL_MESSAGE
         is_refusal = answer.strip() == REFUSAL_MESSAGE.strip()
         retrieved_pages = [h["metadata"].get("page_number") for h in hits]
-        live_scores = {
-            "context_relevance": live_judges.context_relevance(
-                question, [h["text"] for h in hits], container.embedder
-            ),
-            "answer_relevance": live_judges.answer_relevance(question, answer, container.embedder),
-            "groundedness": 1.0 if is_refusal else live_judges.groundedness(answer, hits, container.llm_client),
-        }
+        if is_answerable:
+            live_scores = {
+                "context_relevance": live_judges.context_relevance(
+                    question, [h["text"] for h in hits], container.embedder
+                ),
+                "answer_relevance": live_judges.answer_relevance(question, answer, container.embedder),
+            }
+            if not is_refusal:
+                grounded = live_judges.groundedness(answer, hits[:4], container.llm_client)
+                if grounded is not None:  # None = the judge failed, so there is no score to average
+                    live_scores["groundedness"] = grounded
+            if item.get("ground_truth_context"):
+                live_scores["context_recall"] = context_recall(item["ground_truth_context"], [h["text"] for h in hits])
 
     # Calculate metrics for this query
     h1 = hit_at_k(retrieved_pages, expected_pages, k=1) if is_answerable else 1.0
@@ -139,10 +168,12 @@ def evaluate_single_query(
     rr = reciprocal_rank(retrieved_pages, expected_pages) if is_answerable else 1.0
     ref_score = refusal_score(is_answerable=is_answerable, is_refusal=is_refusal)
     f1 = token_overlap_f1(answer, ground_truth) if is_answerable else ref_score
-    if live_scores:
-        groundedness = live_scores["groundedness"]
+    if live:
+        groundedness = live_scores.get("groundedness")  # None for refusals: they make no claims
+    elif is_refusal:
+        groundedness = None
     else:
-        groundedness = 1.0 if (not is_refusal and h3 > 0.0) or (is_refusal and not is_answerable) else 0.5
+        groundedness = 1.0 if h3 > 0.0 else 0.5  # synthetic heuristic, mock runs only
 
     return {
         "id": item["id"],
@@ -158,19 +189,24 @@ def evaluate_single_query(
         "groundedness": groundedness,
         "context_relevance": live_scores.get("context_relevance"),
         "answer_relevance": live_scores.get("answer_relevance"),
+        "context_recall": live_scores.get("context_recall"),
         "answer": answer,
+        "retrieved_pages": retrieved_pages,
+        "expected_pages": expected_pages,
     }
 
 
 def run_evaluation(
-    dataset_path: str = "evaluation/dataset.jsonl",
+    dataset_path: str = "evaluation/sample_dataset.jsonl",
     config_name: str = "hybrid_with_self_check",
     limit: int | None = None,
     mock: bool = False,
+    verbose: bool = True,
 ) -> EvaluationReport:
     """Executes evaluation across all dataset queries for a given configuration."""
     items = load_dataset(dataset_path, limit=limit)
-    logger.info("Evaluating %d queries under configuration: '%s'", len(items), config_name)
+    if verbose:
+        print(console.header(config_name, len(items), mock), flush=True)
 
     container = None
     if not mock:
@@ -183,9 +219,14 @@ def run_evaluation(
             raise RuntimeError("No chat agent: ingest a PDF first (python -m app.cli ingest <pdf>).")
 
     results = []
-    for item in items:
+    for index, item in enumerate(items, 1):
+        if verbose:
+            print(console.question_start(index, len(items), item["question"]), flush=True)
+        started = time.monotonic()
         res = evaluate_single_query(item, config_name=config_name, mock=mock, container=container)
         results.append(res)
+        if verbose:
+            print(console.question_result(res, time.monotonic() - started), flush=True)
 
     total = len(results)
     ans_items = [r for r in results if r["is_answerable"]]
@@ -196,11 +237,15 @@ def run_evaluation(
     avg_h5 = sum(r["hit_at_5"] for r in ans_items) / ans_total
     avg_mrr = sum(r["reciprocal_rank"] for r in ans_items) / ans_total
     avg_refusal = sum(r["refusal_score"] for r in results) / total
-    avg_groundedness = sum(r["groundedness"] for r in results) / total
+    claims = [r["groundedness"] for r in results if r["groundedness"] is not None]
+    avg_groundedness = sum(claims) / len(claims) if claims else None
+    false_refusal = sum(1 for r in ans_items if r["is_refusal"]) / ans_total
     avg_f1 = sum(r["answer_f1"] for r in ans_items) / ans_total
     live = [r for r in results if r.get("context_relevance") is not None]
     avg_ctx = sum(r["context_relevance"] for r in live) / len(live) if live else None
     avg_ans_rel = sum(r["answer_relevance"] for r in live) / len(live) if live else None
+    recalls = [r["context_recall"] for r in results if r.get("context_recall") is not None]
+    avg_recall = sum(recalls) / len(recalls) if recalls else None
 
     return EvaluationReport(
         config_name=config_name,
@@ -214,12 +259,14 @@ def run_evaluation(
         answer_f1=avg_f1,
         context_relevance=avg_ctx,
         answer_relevance=avg_ans_rel,
+        context_recall=avg_recall,
+        false_refusal_rate=false_refusal,
         per_item_results=results,
     )
 
 
 def run_ablation_study(
-    dataset_path: str = "evaluation/dataset.jsonl",
+    dataset_path: str = "evaluation/sample_dataset.jsonl",
     limit: int | None = None,
     mock: bool = False,
 ) -> str:
@@ -230,22 +277,25 @@ def run_ablation_study(
     for cfg in configs:
         rep = run_evaluation(dataset_path=dataset_path, config_name=cfg, limit=limit, mock=mock)
         reports.append(rep)
+    print(console.ablation(reports, mock), flush=True)
 
+    note = "_Synthetic run (mock): these numbers are not measurements._\n\n" if mock else ""
     table = (
         "### Architectural Ablation Study Results\n\n"
-        "| Configuration | Hit@1 | Hit@3 | Hit@5 | MRR | Refusal Accuracy | Groundedness |\n"
-        "| :--- | :---: | :---: | :---: | :---: | :---: | :---: |\n"
+        + note
+        + "| Configuration | Hit@1 | Hit@3 | Hit@5 | MRR | Context Rel. | Context Recall | Groundedness | Answer Rel. | False refusals | Refusal acc. |\n"
+        "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |\n"
     )
+
+    def cell(value: float | None, digits: int = 3) -> str:
+        return "n/a" if value is None else f"{value:.{digits}f}"
 
     for r in reports:
         table += (
-            f"| **{r.config_name}** | "
-            f"{r.hit_at_1 * 100:.1f}% | "
-            f"{r.hit_at_3 * 100:.1f}% | "
-            f"{r.hit_at_5 * 100:.1f}% | "
-            f"{r.mrr:.3f} | "
-            f"{r.refusal_accuracy * 100:.1f}% | "
-            f"{r.groundedness * 100:.1f}% |\n"
+            f"| **{r.config_name}** | {r.hit_at_1 * 100:.1f}% | {r.hit_at_3 * 100:.1f}% | {r.hit_at_5 * 100:.1f}% | "
+            f"{r.mrr:.3f} | {cell(r.context_relevance)} | {cell(r.context_recall)} | "
+            f"{'n/a' if r.groundedness is None else f'{r.groundedness * 100:.1f}%'} | {cell(r.answer_relevance)} | "
+            f"{r.false_refusal_rate * 100:.1f}% | {r.refusal_accuracy * 100:.1f}% |\n"
         )
 
     return table
@@ -259,7 +309,7 @@ def main():
         choices=["dense_only", "sparse_only", "hybrid", "hybrid_with_self_check", "all"],
         help="Configuration to benchmark",
     )
-    parser.add_argument("--dataset", default="evaluation/dataset.jsonl", help="Path to benchmark dataset")
+    parser.add_argument("--dataset", default="evaluation/sample_dataset.jsonl", help="Path to benchmark dataset")
     parser.add_argument("--limit", type=int, default=None, help="Limit number of queries evaluated")
     parser.add_argument("--mock", action="store_true", default=False, help="Synthetic smoke test; the numbers are not real")
     parser.add_argument("--no-mock", dest="mock", action="store_false", help="Run against live components (default)")
@@ -272,16 +322,15 @@ def main():
     else:
         report = run_evaluation(dataset_path=args.dataset, config_name=args.config, limit=args.limit, mock=args.mock)
         report_md = report.to_markdown()
-
-    print("\n" + "=" * 60)
-    print(report_md)
-    print("=" * 60 + "\n")
+        print(console.summary(report, mock=args.mock))  # readable on screen; the Markdown is for the file
 
     if args.output:
         out_path = Path(args.output)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(report_md, encoding="utf-8")
-        logger.info("Report saved to %s", args.output)
+        print(f"\nFull Markdown report saved to {args.output}")
+    elif args.config == "all":
+        print(report_md)
 
 
 if __name__ == "__main__":

@@ -2,20 +2,28 @@
 
 Context Relevance : mean cosine similarity between the question embedding and each retrieved chunk embedding.
 Answer Relevance  : cosine similarity between the question embedding and the answer embedding.
-Groundedness      : an LLM judge reads the retrieved chunks and scores how many answer claims they support
-                    (the same verifier prompt the agent uses for its self-check).
+Groundedness      : an LLM judge splits the answer into claims and marks each as supported or not by the
+                    retrieved chunks; the score is supported / total, computed here (not by the model).
 
 cosine(a, b) = (a . b) / (|a| |b|), computed explicitly here so the maths is visible.
 """
 
 import json
+import logging
 import math
 from typing import Any
 
 from app.domain.ports.embedder import Embedder
 from app.domain.ports.llm_client import LLMClient
 from app.services.prompts.answer_prompts import build_context_block
-from app.services.prompts.self_check_prompts import SELF_CHECK_INSTRUCTION, build_self_check_prompt
+
+logger = logging.getLogger(__name__)
+
+# A separate prompt from the agent's own self-check, so the judge is not the verifier grading itself.
+JUDGE_INSTRUCTION = """You are a strict faithfulness judge.
+Split the ANSWER into its individual factual claims (ignore citation markers like [S1]).
+For each claim decide whether the CONTEXT alone supports it. Use outside knowledge for nothing.
+Output JSON only: {"claims": [{"claim": "...", "supported": true | false}]}"""
 
 
 def cosine(a: list[float], b: list[float]) -> float:
@@ -36,7 +44,11 @@ def answer_relevance(question: str, answer: str, embedder: Embedder) -> float:
     return cosine(vectors[0], vectors[1])
 
 
-def groundedness(answer: str, chunks: list[dict[str, Any]], llm: LLMClient) -> float:
+def groundedness(answer: str, chunks: list[dict[str, Any]], llm: LLMClient) -> float | None:
+    """Share of the answer's claims the chunks support, or None when the judge itself failed.
+
+    A failed judge call (timeout, 503, bad JSON) says nothing about the answer, so it is not scored as 0.
+    """
     if not chunks:
         return 0.0
     context = build_context_block(
@@ -52,9 +64,16 @@ def groundedness(answer: str, chunks: list[dict[str, Any]], llm: LLMClient) -> f
     )
     try:
         raw = llm.generate_json(
-            prompt=build_self_check_prompt(answer=answer, context_block=context),
-            system_instruction=SELF_CHECK_INSTRUCTION,
+            prompt=f"CONTEXT:\n{context}\n\nANSWER:\n{answer}\n\nCLAIMS JSON:",
+            system_instruction=JUDGE_INSTRUCTION,
         )
-        return max(0.0, min(1.0, float(json.loads(raw).get("score", 0.0))))
-    except Exception:
-        return 0.0
+        claims = json.loads(raw).get("claims", [])
+        if not isinstance(claims, list) or not claims:
+            logger.warning("Groundedness judge returned no claims; not scored.")
+            return None
+        # The score is computed here from the verdicts, not taken from the model.
+        supported = sum(1 for c in claims if isinstance(c, dict) and c.get("supported") is True)
+        return supported / len(claims)
+    except Exception as exc:
+        logger.warning("Groundedness judge failed (%s); not scored.", exc)
+        return None

@@ -51,6 +51,19 @@ def token_overlap_f1(candidate: str, reference: str) -> float:
     return 2.0 * (precision * recall) / (precision + recall)
 
 
+def context_recall(ground_truth_context: str, retrieved_texts: list[str]) -> float:
+    """Share of the ground-truth passage's distinct words that appear in the retrieved chunks.
+
+    1.0 means everything the reference passage says was retrieved (at least lexically);
+    it is computed without an LLM so the number is reproducible.
+    """
+    words = set(re.findall(r"\w+", ground_truth_context.lower()))
+    if not words:
+        return 0.0
+    retrieved = set(re.findall(r"\w+", " ".join(retrieved_texts).lower()))
+    return len(words & retrieved) / len(words)
+
+
 def refusal_score(is_answerable: bool, is_refusal: bool) -> float:
     """Evaluates whether the system appropriately answered or refused.
 
@@ -73,10 +86,12 @@ class EvaluationReport:
     hit_at_5: float
     mrr: float
     refusal_accuracy: float
-    groundedness: float
+    groundedness: float | None  # mean over answers that made claims; refusals are not scored
     answer_f1: float
     context_relevance: float | None = None
     answer_relevance: float | None = None
+    context_recall: float | None = None
+    false_refusal_rate: float = 0.0  # answerable questions the system refused
     per_item_results: list[dict[str, Any]] = field(default_factory=list)
 
     def to_markdown(self) -> str:
@@ -91,7 +106,8 @@ class EvaluationReport:
             f"| **Hit@5** | {self.hit_at_5 * 100:.1f}% | &ge; 90.0% |\n"
             f"| **MRR** (Mean Reciprocal Rank) | {self.mrr:.3f} | &ge; 0.750 |\n"
             f"| **Refusal Accuracy** | {self.refusal_accuracy * 100:.1f}% | &ge; 90.0% |\n"
-            f"| **Groundedness** (Entailment) | {self.groundedness * 100:.1f}% | &ge; 90.0% |\n"
+            f"| **Groundedness** (claims supported by retrieved chunks) | {_pct(self.groundedness)} | &ge; 90.0% |\n"
+            f"| **False refusal rate** (answerable but refused) | {self.false_refusal_rate * 100:.1f}% | &le; 10.0% |\n"
             f"| **Answer F1 vs ground truth** | {self.answer_f1 * 100:.1f}% | &ge; 70.0% |\n"
             + self._live_rows()
             + self._per_query_table()
@@ -100,10 +116,13 @@ class EvaluationReport:
     def _live_rows(self) -> str:
         if self.context_relevance is None:
             return "\n_Synthetic run (mock): the numbers above are not real measurements._\n"
-        return (
+        rows = (
             f"| **Context Relevance** (cosine, question vs chunks) | {self.context_relevance:.3f} | &ge; 0.600 |\n"
-            f"| **Answer Relevance** (cosine, question vs answer) | {self.answer_relevance:.3f} | &ge; 0.600 |\n"
+            f"| **Answer Relevance** (cosine, question vs answer) | {_num(self.answer_relevance)} | &ge; 0.600 |\n"
         )
+        if self.context_recall is not None:
+            rows += f"| **Context Recall** (ground-truth passage found in chunks) | {self.context_recall:.3f} | &ge; 0.700 |\n"
+        return rows
 
     def _per_query_table(self) -> str:
         rows = [r for r in self.per_item_results if r.get("context_relevance") is not None]
@@ -111,14 +130,22 @@ class EvaluationReport:
             return ""
         lines = [
             "\n#### Per-query scores\n",
-            "| Question | Answer | Context Rel. | Groundedness | Answer Rel. |",
-            "| :--- | :--- | :---: | :---: | :---: |",
+            "| ID | Question | Response | Context Rel. | Groundedness | Answer Rel. |",
+            "| :--- | :--- | :--- | :---: | :---: | :---: |",
         ]
         for r in rows:
-            answer = " ".join(r["answer"].split())[:90].replace("|", "/")
+            answer = " ".join(r["answer"].split()).replace("|", "/")
             lines.append(
-                f"| {r['question'][:70]} | {answer} | {r['context_relevance']:.2f} | "
-                f"{r['groundedness']:.2f} | {r['answer_relevance']:.2f} |"
+                f"| {r['id']} | {r['question']} | {answer} | {r['context_relevance']:.2f} | "
+                f"{_num(r.get('groundedness'), 2)} | {_num(r.get('answer_relevance'), 2)} |"
             )
         return "\n".join(lines) + "\n"
+
+
+def _pct(value: float | None) -> str:
+    return "n/a" if value is None else f"{value * 100:.1f}%"
+
+
+def _num(value: float | None, digits: int = 3) -> str:
+    return "n/a" if value is None else f"{value:.{digits}f}"
 

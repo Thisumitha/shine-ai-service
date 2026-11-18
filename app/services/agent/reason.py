@@ -27,6 +27,10 @@ class ReasonResult:
     intent: str
     reason: str
     search_needed: bool
+    sub_queries: tuple[str, ...] = ()  # the plan: separate searches for a multi-part question
+
+
+MAX_SUB_QUERIES = 3
 
 
 class ReasonStage:
@@ -59,6 +63,7 @@ class ReasonStage:
                 intent=intent,
                 reason=reason,
                 search_needed=search_needed,
+                sub_queries=self._clean_sub_queries(data.get("sub_queries"), intent),
             )
 
         except Exception as exc:
@@ -68,6 +73,18 @@ class ReasonStage:
                 reason="Default fallback due to classification error",
                 search_needed=True,
             )
+
+    @staticmethod
+    def _clean_sub_queries(raw: Any, intent: str) -> tuple[str, ...]:
+        """Keep a plan only for course questions; drop blanks and duplicates, cap the length."""
+        if intent != INTENT_COURSE_CONTENT or not isinstance(raw, list):
+            return ()
+        cleaned: list[str] = []
+        for item in raw:
+            text = " ".join(str(item).split())
+            if text and text.lower() not in {c.lower() for c in cleaned}:
+                cleaned.append(text)
+        return tuple(cleaned[:MAX_SUB_QUERIES]) if len(cleaned) > 1 else ()
 
     @staticmethod
     def _summarize_history(history: list[Message], max_turns: int = 3) -> str:

@@ -12,7 +12,9 @@ class Settings(BaseSettings):
     spring_base_url: str = ""
     student_data_timeout_seconds: float = 10.0
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-3-flash-preview"
+    gemini_model: str = "gemini-3.8-flash"
+    # Changing the embedding model changes the vector size, so re-ingest (python -m app.cli reset) after.
+    gemini_embedding_model: str = "gemini-embedding-001"
     gemini_temperature: float = 0.2
     gemini_max_retries: int = 3
     chroma_dir: str = "./data/chroma"

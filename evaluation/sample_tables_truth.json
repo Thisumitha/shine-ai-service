@@ -1,0 +1,106 @@
+{
+  "pdf": "sample/sample-tables.pdf",
+  "note": "Hand-written from the printed tables on pages 1-3 (PDF page numbers). Cells are the data values only; each row must stay together when the table is read back.",
+  "pages": {
+    "1": [
+      {
+        "name": "Table 1: basic table with TH / TD",
+        "rows": [
+          ["Column header (TH)", "Column header (TH)", "Column header (TH)"],
+          ["Row header (TH)", "Data cell (TD)", "Data cell (TD)"],
+          ["Row header(TH)", "Data cell (TD)", "Data cell (TD)"]
+        ]
+      },
+      {
+        "name": "Table 2: expenditure by function",
+        "rows": [
+          ["Financial", "22.5", "30.57"],
+          ["Information", "10.2", "14.8"],
+          ["Contingency", "2.6", "1.2"],
+          ["Agency services", "44.7", "35.91"],
+          ["Payments", "22.41", "19.88"],
+          ["Banking", "22.90", "44.23"],
+          ["Other", "12.69", "10.32"]
+        ]
+      },
+      {
+        "name": "Table 3: cast list",
+        "rows": [
+          ["Main character", "Daniel Radcliffe"],
+          ["Sidekick 1", "Rupert Grint"],
+          ["Sidekick 2", "Emma Watson"],
+          ["Lovable ogre", "Robbie Coltrane"],
+          ["Professor", "Maggie Smith"],
+          ["Headmaster", "Richard Harris"]
+        ]
+      }
+    ],
+    "2": [
+      {
+        "name": "Table 4: cast list with column headers",
+        "rows": [
+          ["Role", "Actor"],
+          ["Main character", "Daniel Radcliffe"],
+          ["Sidekick 1", "Rupert Grint"],
+          ["Sidekick 2", "Emma Watson"],
+          ["Lovable ogre", "Robbie Coltrane"],
+          ["Professor", "Maggie Smith"],
+          ["Headmaster", "Richard Harris"]
+        ]
+      },
+      {
+        "name": "Table 5: year-end financial statement",
+        "rows": [
+          ["2010", "2009", "2008"],
+          ["Property", "345", "445", "222"],
+          ["Investment", "567", "654", "423"],
+          ["Intangibles", "423", "123", "453"],
+          ["Trade and other receivables", "435", "634", "231"],
+          ["Cash and cash equivalents", "524", "123", "482"],
+          ["Other", "223", "211", "254"]
+        ]
+      },
+      {
+        "name": "Table 6: rainfall by continent, 2010 and 2009",
+        "rows": [
+          ["Americas", "Asia", "Europe", "Africa"],
+          ["Average", "104", "201", "193", "144"],
+          ["24 hour high", "15", "26", "27", "18"],
+          ["12 hour high", "9", "10", "11", "12"],
+          ["Average", "133", "244", "155", "166"],
+          ["24 hour high", "27", "28", "29", "20"],
+          ["12 hour high", "11", "12", "13", "16"]
+        ]
+      }
+    ],
+    "3": [
+      {
+        "name": "Table 7: non-current assets",
+        "rows": [
+          ["2010", "2009", "2008"],
+          ["Property", "345", "445", "222"],
+          ["Investment", "567", "654", "423"],
+          ["Intangibles", "423", "123", "453"]
+        ]
+      },
+      {
+        "name": "Table 8: current assets",
+        "rows": [
+          ["2010", "2009", "2008"],
+          ["Trade and other receivables", "435", "634", "231"],
+          ["Cash and cash equivalents", "524", "123", "482"],
+          ["Other", "223", "211", "254"]
+        ]
+      },
+      {
+        "name": "Table 9: rainfall by continent, 2009",
+        "rows": [
+          ["Americas", "Asia", "Europe", "Africa"],
+          ["Average", "133", "244", "155", "166"],
+          ["24 hour high", "27", "28", "29", "20"],
+          ["12 hour high", "11", "12", "13", "16"]
+        ]
+      }
+    ]
+  }
+}

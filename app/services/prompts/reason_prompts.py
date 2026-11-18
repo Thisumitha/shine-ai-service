@@ -19,13 +19,26 @@ Your job is to analyze the student's input (and recent conversation context) and
    - Questions about the student's own records: class timetable or schedule, exam dates, payment invoices or dues, attendance.
    - Example: "What classes do I have today?", "Do I have any pending invoices?", "What is my attendance?"
 
+If the intent is COURSE_CONTENT and the question has several distinct parts (for example "compare X and Y" or "what is A, and how does it differ from B?"),
+split it into at most 3 short, self-contained search queries in "sub_queries". For a single-part question, leave "sub_queries" empty.
+
 Output strictly valid JSON with this exact schema:
 {
   "intent": "COURSE_CONTENT" | "SMALL_TALK" | "OFF_TOPIC" | "STUDENT_DATA",
   "reason": "Brief one-sentence explanation of why this category was chosen",
-  "search_needed": true | false
+  "search_needed": true | false,
+  "sub_queries": ["self-contained search query", ...]
 }
 """
+
+REWRITE_SYSTEM_PROMPT = """You rewrite a student's question into a better search query for a lecture-slide search engine.
+Keep the meaning. Replace vague words with the specific technical terms a slide would use, and drop filler.
+Output only the rewritten query on one line, with no quotes or explanation."""
+
+
+def build_rewrite_prompt(query: str) -> str:
+    """Build the prompt asking for a reworded search query."""
+    return f"ORIGINAL QUESTION: {query}\n\nREWRITTEN SEARCH QUERY:"
 
 
 def build_reason_prompt(message: str, history_summary: str = "") -> str:

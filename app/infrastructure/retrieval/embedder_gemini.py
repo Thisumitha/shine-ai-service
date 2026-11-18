@@ -5,11 +5,17 @@ from tenacity import (
     retry,
     stop_after_attempt,
     wait_exponential,
-    retry_if_exception_type,
+    retry_if_exception,
 )
 
 from app.config import get_settings
 from app.domain.ports.embedder import Embedder
+from app.infrastructure.network_errors import is_network_error
+
+
+def _is_retryable(error: BaseException) -> bool:
+    """Gemini API errors and any temporary network failure (including DNS lookups) are retried."""
+    return isinstance(error, APIError) or is_network_error(error)
 
 
 class GeminiEmbedder(Embedder):
@@ -18,14 +24,14 @@ class GeminiEmbedder(Embedder):
     def __init__(
         self,
         client=None,
-        model: str = "gemini-embedding-001",
+        model: str | None = None,
         batch_size: int = 100,
         api_key: str | None = None,
     ):
         if batch_size <= 0:
             raise ValueError("batch_size must be greater than zero.")
 
-        self.model = model
+        self.model = model or get_settings().gemini_embedding_model
         self.batch_size = batch_size
 
         # Keep an injected fake or real client if one was provided.
@@ -68,14 +74,12 @@ class GeminiEmbedder(Embedder):
         return all_embeddings
 
     @retry(
-        retry=retry_if_exception_type(
-            (APIError, TimeoutError, ConnectionError)
-        ),
-        stop=stop_after_attempt(3),
+        retry=retry_if_exception(_is_retryable),
+        stop=stop_after_attempt(5),
         wait=wait_exponential(
             multiplier=1,
             min=1,
-            max=8,
+            max=10,
         ),
         reraise=True,
     )

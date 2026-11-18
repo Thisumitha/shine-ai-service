@@ -83,3 +83,74 @@ def test_run_evaluation_mock():
     assert "Hit@1" in md
     assert "MRR" in md
 
+
+
+def test_context_recall_counts_ground_truth_words_found_in_chunks():
+    from evaluation.metrics import context_recall
+
+    assert context_recall("binary search halves", ["Binary search halves the interval"]) == 1.0
+    assert context_recall("binary search halves", ["linear scan"]) == 0.0
+    assert context_recall("", ["anything"]) == 0.0
+
+
+def test_sample_dataset_has_ground_truth_context_for_answerable_rows():
+    items = load_dataset("evaluation/sample_dataset.jsonl")
+    for item in items:
+        assert bool(item["ground_truth_context"]) == item["is_answerable"]
+
+
+def test_ablation_configs_pick_different_retrievers():
+    from types import SimpleNamespace
+
+    from evaluation.run_eval import _retriever_for
+
+    container = SimpleNamespace(dense_retriever="dense", sparse_indexer="sparse", retriever="hybrid")
+    assert _retriever_for("dense_only", container) == "dense"
+    assert _retriever_for("sparse_only", container) == "sparse"
+    assert _retriever_for("hybrid", container) == "hybrid"
+    assert _retriever_for("hybrid_with_self_check", container) == "hybrid"
+
+
+def test_refusals_are_not_scored_for_groundedness_and_count_as_false_refusals():
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from app.services.answer_service import REFUSAL_MESSAGE
+
+    retriever = MagicMock()
+    retriever.search.return_value = [{"id": "1-0", "text": "t", "metadata": {"page_number": 4}}]
+    agent = MagicMock()
+    agent.handle_message.return_value = SimpleNamespace(answer=REFUSAL_MESSAGE)
+    container = SimpleNamespace(
+        chat_agent=agent, retriever=retriever, dense_retriever=retriever, sparse_indexer=retriever,
+        embedder=MagicMock(embed=lambda texts: [[1.0, 0.0]] * len(texts)), llm_client=MagicMock(),
+    )
+    from evaluation.run_eval import evaluate_single_query
+
+    result = evaluate_single_query(
+        {"id": "q", "question": "?", "is_answerable": True, "expected_page_numbers": [4], "ground_truth_answer": "x"},
+        config_name="hybrid_with_self_check", mock=False, container=container,
+    )
+    assert result["is_refusal"] is True
+    assert result["groundedness"] is None
+    assert result["refusal_score"] == 0.0
+
+
+def test_groundedness_is_none_when_the_judge_fails_not_zero():
+    import json
+    from unittest.mock import MagicMock
+
+    from evaluation.live_judges import groundedness
+
+    chunks = [{"text": "Binary search halves the range.", "metadata": {"title": "a.pdf", "page_number": 3}}]
+    llm = MagicMock()
+
+    llm.generate_json.side_effect = RuntimeError("503 UNAVAILABLE")
+    assert groundedness("An answer [S1].", chunks, llm) is None  # a failed judge says nothing about the answer
+
+    llm.generate_json.side_effect = None
+    llm.generate_json.return_value = json.dumps({"claims": []})
+    assert groundedness("An answer [S1].", chunks, llm) is None
+
+    llm.generate_json.return_value = json.dumps({"claims": [{"supported": True}, {"supported": False}]})
+    assert groundedness("An answer [S1].", chunks, llm) == 0.5  # computed from the verdicts, not given by the model

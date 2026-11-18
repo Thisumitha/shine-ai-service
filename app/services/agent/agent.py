@@ -9,6 +9,8 @@ from app.services.agent.act import ActStage
 from app.services.agent.observe import ObserveStage
 from app.services.agent.persist import PersistStage
 from app.services.agent.reason import ReasonStage
+from app.services.agent.rewrite import QueryRewriter
+from app.services.agent.state import AgentTrace
 from app.services.agent.student_data import StudentDataStage
 from app.services.answer_service import AnswerService
 from app.services.self_check_service import SelfCheckService
@@ -26,6 +28,7 @@ class AgentResponse:
     message_id: str
     intent: str
     reason: str = ""
+    trace: AgentTrace | None = None
 
 
 class ChatAgent:
@@ -62,6 +65,7 @@ class ChatAgent:
                 answer_service=answer_service,
                 self_check_service=self_check_service,
                 student_data_stage=student_data_stage,
+                query_rewriter=QueryRewriter(llm_client),
             ),
             persist_stage=PersistStage(chat_store=chat_store),
         )
@@ -113,12 +117,19 @@ class ChatAgent:
             reason_result.reason,
         )
 
-        # 3. Act: Retrieval, grounded answer generation, and self-check
-        answer, citations = self.act.act(
+        trace = AgentTrace(
+            intent=reason_result.intent,
+            reason=reason_result.reason,
+            sub_queries=list(reason_result.sub_queries),
+        )
+
+        # 3. Act: Retrieval, grounded answer generation, and self-check (bounded retry loop)
+        answer, citations = self.act.act_traced(
             user_id=user_id,
             course_id=effective_course_id,
             query=message,
             reason_result=reason_result,
+            trace=trace,
             history=history,
             course_ids=effective_course_ids,
             student_email=student_email,
@@ -139,5 +150,6 @@ class ChatAgent:
             message_id=saved_msg.message_id,
             intent=reason_result.intent,
             reason=reason_result.reason,
+            trace=trace,
         )
 

@@ -27,8 +27,8 @@ Spring uploads PDF -> POST /internal/index -> job QUEUED (MySQL)
                                                  |
         for every page:
           1. read text                      (PdfLoader)
-          2. text almost empty? -> scanned  -> render PNG -> Tesseract
-          3. text pages only: find tables   (TableExtractor) -> Markdown
+          2. text almost empty? -> scanned  -> render PNG -> Tesseract (text + tables rebuilt from word boxes)
+          3. text pages: find tables        (TableExtractor) -> Markdown
           4. clean the text                 (clean_page)
         after all pages:
           5. remove headers/footers that repeat on most pages
@@ -39,7 +39,7 @@ Spring uploads PDF -> POST /internal/index -> job QUEUED (MySQL)
 Details:
 - **Scanned page:** fewer than 25 characters of text. If no OCR engine is available the page stays empty instead of failing.
 - **OCR cap:** at most `OCR_MAX_PAGES` (default 200) pages per PDF are OCR'd, to limit time.
-- **Tables:** a table needs at least 2 rows and 2 columns. The first row becomes the header. Pages that were OCR'd skip table detection.
+- **Tables:** a table needs at least 2 rows and 2 columns. The first row becomes the header. On OCR'd pages the tables are rebuilt from Tesseract word positions (`ocr_tables.py`): words are grouped into rows, cut into cells at wide gaps, and a run of at least 3 aligned rows becomes a Markdown table. Plain Tesseract text reads tables column by column and loses the row links. How well this works is measured by `python -m evaluation.table_fidelity` (see the README, section 5).
 - **Headers/footers:** a top or bottom line that appears (digits ignored, so "Page 3" = "Page 4") on at least 60% of pages, and at least 3 pages, is removed. Pages with 4 or fewer lines are left alone.
 - **Bad PDF:** the worker marks the job `FAILED` with the error text and keeps running. A table error on one page does not lose that page's text.
 - **Output JSON:** `{"filename": ..., "pages": [{"page_number", "text", "tables_markdown", "used_ocr"}, ...]}`. The next stage (chunking) will read this.

@@ -33,6 +33,7 @@ class Container:
     answer_service: AnswerService
     self_check_service: SelfCheckService
     chat_agent: ChatAgent | None
+    dense_retriever: Retriever | None = None  # exposed so the evaluation can ablate dense / sparse / hybrid
 
 
 def build_container(settings: Settings | None = None) -> Container:
@@ -66,7 +67,7 @@ def build_container(settings: Settings | None = None) -> Container:
     embedder = None
     try:
         from app.infrastructure.retrieval.embedder_gemini import GeminiEmbedder
-        embedder = GeminiEmbedder(api_key=settings.gemini_api_key)
+        embedder = GeminiEmbedder(api_key=settings.gemini_api_key, model=settings.gemini_embedding_model)
     except Exception as exc:
         logger.debug("GeminiEmbedder could not be loaded: %s", exc)
 
@@ -194,4 +195,5 @@ def build_container(settings: Settings | None = None) -> Container:
         answer_service=answer_service,
         self_check_service=self_check_service,
         chat_agent=chat_agent,
+        dense_retriever=dense_retriever,
     )

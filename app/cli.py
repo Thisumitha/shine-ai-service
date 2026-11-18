@@ -17,7 +17,8 @@ from pathlib import Path
 
 from app.config import get_settings
 from app.container import Container, build_container
-from app.services.agent.reason import INTENT_COURSE_CONTENT
+from app.logging_setup import quiet_libraries
+from app.services.agent.state import AgentTrace
 
 ROOT = Path(__file__).resolve().parents[1]
 DEMO_STUDENT = "demo.student@shine.lk"
@@ -48,6 +49,9 @@ def cmd_ingest(args: argparse.Namespace) -> None:
     if container.ingestion is None:
         sys.exit("Ingestion is not available (check pymupdf, chromadb and google-genai are installed).")
 
+    if container.ocr is not None and (problem := container.ocr.problem()):
+        print(f"[WARNING] {problem} Image-only pages will be skipped; set TESSERACT_CMD in .env.")
+
     target = Path(args.path)
     pdfs = sorted(target.glob("*.pdf")) if target.is_dir() else [target]
     if not pdfs or not all(p.is_file() and p.suffix.lower() == ".pdf" for p in pdfs):
@@ -68,34 +72,40 @@ def cmd_ingest(args: argparse.Namespace) -> None:
         print(f"         {len(chunks)} chunks ({span}) embedded into Chroma and indexed with TF-IDF")
 
 
-def _print_retrieval(container: Container, query: str, course: int, show_math: bool) -> None:
-    hits = container.retriever.search(query=query, course_ids={course}, top_k=4)
-    print(f"\n[RETRIEVE] hybrid search (dense + TF-IDF, fused with Reciprocal Rank Fusion): {len(hits)} chunks")
-    for i, hit in enumerate(hits, 1):
-        meta = hit.get("metadata", {})
+def _print_steps(container: Container, trace: AgentTrace, show_math: bool) -> None:
+    """Print what the agent actually retrieved, taken from its own trace (nothing is searched twice)."""
+    for step in trace.steps:
         print(
-            f"  #{i} {meta.get('title')} p.{meta.get('page_number')}  RRF={hit['score']:.4f}  "
-            f"dense_rank={hit['dense_rank']} sparse_rank={hit['sparse_rank']}"
+            f"\n[RETRIEVE] attempt {step.attempt}, search {step.sub_query!r}: hybrid (dense + TF-IDF, "
+            f"fused with Reciprocal Rank Fusion), {len(step.hits)} chunks"
         )
-        if show_math:
-            if "dense_distance" in hit:
-                print(f"      dense distance = {hit['dense_distance']:.4f}")
-            math = hit.get("sparse_math")
-            if math:
-                print(
-                    f"      TF-IDF dot={math['dot_product']:.4f}  |q|={math['query_magnitude']:.4f}  "
-                    f"|d|={math['chunk_magnitude']:.4f}  cosine = dot/(|q||d|) = {math['cosine']:.4f}"
-                )
-        print("      " + " ".join(hit["text"].split())[:160] + "...")
-    if show_math and hits and container.sparse_indexer is not None:
-        terms = container.sparse_indexer.explain_terms(query, hits[0]["id"])
-        if terms:
-            print("\n  Worked example for chunk #1 (dot product = sum of query weight x chunk weight per shared term):")
-            for t in terms:
-                print(
-                    f"      {t['term']!r:24} idf={t['idf']:.3f}  q={t['query_weight']:.3f}  "
-                    f"d={t['chunk_weight']:.3f}  product={t['product']:.3f}"
-                )
+        for i, hit in enumerate(step.hits, 1):
+            print(
+                f"  #{i} {hit.file_name} p.{hit.page_number}  RRF={hit.rrf_score:.4f}  "
+                f"dense_rank={hit.dense_rank} sparse_rank={hit.sparse_rank}"
+            )
+            if show_math:
+                if hit.dense_distance is not None:
+                    print(
+                        f"      dense: cosine distance = {hit.dense_distance:.4f}, "
+                        f"cosine similarity = 1 - distance = {1 - hit.dense_distance:.4f}"
+                    )
+                math = hit.sparse_math
+                if math:
+                    print(
+                        f"      TF-IDF dot={math['dot_product']:.4f}  |q|={math['query_magnitude']:.4f}  "
+                        f"|d|={math['chunk_magnitude']:.4f}  cosine = dot/(|q||d|) = {math['cosine']:.4f}"
+                    )
+        first = step.hits[0] if step.hits else None
+        if show_math and first and container.sparse_indexer is not None:
+            terms = container.sparse_indexer.explain_terms(step.sub_query, first.chunk_id)
+            if terms:
+                print("\n  Worked example for chunk #1 (dot product = sum of query weight x chunk weight per shared term):")
+                for t in terms:
+                    print(
+                        f"      {t['term']!r:24} idf={t['idf']:.3f}  q={t['query_weight']:.3f}  "
+                        f"d={t['chunk_weight']:.3f}  product={t['product']:.3f}"
+                    )
 
 
 def cmd_ask(args: argparse.Namespace) -> None:
@@ -105,14 +115,26 @@ def cmd_ask(args: argparse.Namespace) -> None:
         sys.exit("Chat is not available. Ingest a PDF first: python -m app.cli ingest <pdf>")
 
     print(f"[OBSERVE] question: {args.question}")
-    reasoned = agent.reason.reason(args.question)
-    print(f"[REASON]  intent={reasoned.intent} ({reasoned.reason})")
-    if reasoned.intent == INTENT_COURSE_CONTENT:
-        _print_retrieval(container, args.question, args.course, args.show_math)
-    print("\n[ACT]     generating a grounded answer and self-checking it ...")
-    result = agent.handle_message(
-        user_id="cli", course_id=args.course, message=args.question, student_email=DEMO_STUDENT
-    )
+    try:
+        result = agent.handle_message(
+            user_id="cli", course_id=args.course, message=args.question, student_email=DEMO_STUDENT
+        )
+    except Exception as exc:  # network down, quota, retired model: say why instead of a long traceback
+        sys.exit(
+            f"\nCould not get an answer: {type(exc).__name__}: {str(exc)[:300]}\n"
+            "Check your internet connection and GEMINI_MODEL / GEMINI_API_KEY in .env, then try again."
+        )
+    trace = result.trace
+    print(f"[REASON]  intent={result.intent} ({result.reason})")
+    if trace and len(trace.sub_queries) > 1:
+        print(f"[PLAN]    split into {len(trace.sub_queries)} searches: {trace.sub_queries}")
+    if trace and trace.steps:
+        _print_steps(container, trace, args.show_math)
+    if trace:
+        for note in trace.notes:
+            print(f"[LOOP]    {note}")
+        if trace.grounded is not None:
+            print(f"[CHECK]   self-check verdict: {'grounded' if trace.grounded else 'rejected'} (attempts: {trace.attempts})")
     print(f"\n[ANSWER]\n{result.answer}\n")
     for c in result.citations:
         print(f"  source: {c.file_name} p.{c.page_number}")
@@ -122,6 +144,8 @@ def cmd_ask(args: argparse.Namespace) -> None:
 def cmd_eval(args: argparse.Namespace) -> None:
     from evaluation import run_eval
 
+    if not args.mock and not get_settings().gemini_api_key:
+        sys.exit("GEMINI_API_KEY is empty. Copy .env.example to .env and set it (or use --mock for a smoke test).")
     argv = ["run_eval", "--dataset", args.dataset, "--config", args.config]
     argv.append("--mock" if args.mock else "--no-mock")
     if args.limit:
@@ -129,7 +153,13 @@ def cmd_eval(args: argparse.Namespace) -> None:
     if args.output:
         argv += ["--output", args.output]
     sys.argv = argv
-    run_eval.main()
+    try:
+        run_eval.main()
+    except Exception as exc:  # a retired model or a bad key fails every question, so stop with the reason
+        sys.exit(
+            f"Evaluation stopped: {type(exc).__name__}: {str(exc)[:300]}\n"
+            "If it says the model is not found or unavailable, set GEMINI_MODEL in .env (see .env.example)."
+        )
 
 
 def cmd_mcp(_: argparse.Namespace) -> None:
@@ -156,6 +186,7 @@ def cmd_reset(_: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    quiet_libraries()  # no HTTP log lines (set SHINE_DEBUG=1 to see them)
     parser = argparse.ArgumentParser(prog="python -m app.cli", description="Shine AI standalone CLI")
     sub = parser.add_subparsers(dest="command", required=True)
 

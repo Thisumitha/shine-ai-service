@@ -15,7 +15,7 @@ class GeminiLLM(LLMClient):
             api_key=settings.gemini_api_key
         )
 
-        self.model = "gemini-2.5-flash"
+        self.model = settings.gemini_model
 
     def generate(self, prompt: str) -> str:
 
