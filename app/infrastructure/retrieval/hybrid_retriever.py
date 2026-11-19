@@ -1,6 +1,12 @@
 
+import logging
+
 from app.domain.ports.retriever import Retriever
+from app.infrastructure.llm.error_messages import is_service_error, plain_error
 from app.domain.ports.sparse_indexer import SparseIndexer
+
+
+logger = logging.getLogger(__name__)
 
 
 class HybridRetriever(Retriever):
@@ -57,11 +63,18 @@ class HybridRetriever(Retriever):
         clean_query = query.strip()
 
         # Retrieve candidates from both search methods.
-        dense_results = self.dense_retriever.search(
-            query=clean_query,
-            course_ids=course_ids,
-            top_k=top_k,
-        )
+        try:
+            dense_results = self.dense_retriever.search(
+                query=clean_query,
+                course_ids=course_ids,
+                top_k=top_k,
+            )
+        except Exception as err:
+            if not is_service_error(err):
+                raise
+            # The question could not be embedded (quota, outage, no network): keyword search still works.
+            logger.warning("Meaning-based search is unavailable (%s). Using keyword search only.", plain_error(err))
+            dense_results = []
 
         sparse_results = self.sparse_indexer.search(
             query=clean_query,

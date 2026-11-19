@@ -158,3 +158,37 @@ def test_search_returns_empty_for_empty_index(sparse_index):
     )
 
     assert results == []
+
+def test_score_chunk_matches_the_search_score(sparse_index, sample_chunks):
+    sparse_index.index_item(1, sample_chunks[:2])
+    hits = sparse_index.search("python data science", {10}, top_k=5)
+
+    for hit in hits:
+        scored = sparse_index.score_chunk("python data science", hit["id"])
+        assert scored["cosine"] == pytest.approx(hit["score"])
+        assert scored["dot_product"] == pytest.approx(hit["math"]["dot_product"])
+
+
+def test_score_chunk_scores_a_chunk_outside_the_top_results(sparse_index, sample_chunks):
+    sparse_index.index_item(1, sample_chunks[:2])
+    top_one = sparse_index.search("data", {10}, top_k=1)
+    cut_off = next(h for h in sparse_index.search("data", {10}, top_k=5) if h["id"] != top_one[0]["id"])
+
+    scored = sparse_index.score_chunk("data", cut_off["id"])
+
+    assert scored["cosine"] == pytest.approx(cut_off["score"])
+    assert scored["rank"] == 2  # it was cut by top_k=1, but the value is still available
+
+
+def test_score_chunk_without_a_shared_word_has_no_rank(sparse_index, sample_chunks):
+    sparse_index.index_item(1, sample_chunks[:2])
+    chunk_id = sparse_index.search("python", {10}, top_k=5)[0]["id"]
+
+    scored = sparse_index.score_chunk("zebra", chunk_id)
+
+    assert scored is None or (scored["cosine"] == 0 and scored["rank"] is None)
+
+
+def test_score_chunk_unknown_id_is_none(sparse_index, sample_chunks):
+    sparse_index.index_item(1, sample_chunks[:2])
+    assert sparse_index.score_chunk("python", "no-such-chunk") is None

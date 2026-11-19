@@ -1,5 +1,7 @@
 
 import json
+import time
+from collections.abc import Callable
 from dataclasses import asdict
 from pathlib import Path
 
@@ -53,13 +55,27 @@ class IngestionService:
             encoding="utf-8",
         )
 
-    def process(self, job: dict) -> str:
-        """Process a PDF and update both dense and sparse indexes."""
+    def process(self, job: dict, progress: Callable[[str], None] | None = None) -> str:
+        """Process a PDF and update both dense and sparse indexes.
+
+        `progress` receives a short message at each stage (used by the CLI so a slow step is visible).
+        """
+
+        def say(message: str) -> None:
+            if progress:
+                progress(message)
 
         item_id = job["item_id"]
 
         # 1. Extract PDF content.
+        started = time.monotonic()
         document = self.parse(job["pdf_path"])
+        ocr_pages = [p.page_number for p in document.pages if p.used_ocr]
+        say(
+            f"1/4 read {len(document.pages)} pages, {sum(len(p.tables_markdown) for p in document.pages)} tables"
+            + (f", OCR on pages {ocr_pages}" if ocr_pages else "")
+            + f" ({time.monotonic() - started:.0f}s)"
+        )
 
         self.extracted_dir.mkdir(parents=True, exist_ok=True)
 
@@ -83,10 +99,15 @@ class IngestionService:
             job.get("title") or document.filename,
         )
 
+        say(f"2/4 cut into {len(chunks)} chunks")
+
         # 3. Generate embeddings when chunks exist.
         texts = [chunk.text for chunk in chunks]
 
+        say(f"3/4 embedding {len(chunks)} chunks with Gemini (waits on the network; a slow connection can take a minute) ...")
+        started = time.monotonic()
         embeddings = self.embedder.embed(texts) if chunks else []
+        say(f"    embeddings received ({time.monotonic() - started:.0f}s)")
 
         if len(embeddings) != len(chunks):
             raise RuntimeError(
@@ -129,5 +150,6 @@ class IngestionService:
 
         # 7. Save chunks for persistence and future index rebuilding.
         self._save_chunks(item_id, chunks)
+        say("4/4 stored in Chroma and the TF-IDF index")
 
         return "INDEXED"

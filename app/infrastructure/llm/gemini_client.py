@@ -1,5 +1,6 @@
 import json
 import logging
+import random
 import re
 import time
 from typing import Any
@@ -10,6 +11,7 @@ import httpx
 
 from app.config import Settings
 from app.domain.ports.llm_client import LLMClient
+from app.infrastructure.llm.error_messages import plain_error
 from app.infrastructure.network_errors import is_network_error
 
 logger = logging.getLogger(__name__)
@@ -25,12 +27,16 @@ class GeminiClient(LLMClient):
         self,
         settings: Settings,
         client: genai.Client | None = None,
+        log_final_failure: bool = True,
     ):
         self.settings = settings
         self.model = settings.gemini_model
         self.temperature = settings.gemini_temperature
         self.max_retries = max(1, settings.gemini_max_retries)
+        self.fallback_models = [m.strip() for m in settings.gemini_fallback_models.split(",") if m.strip()]
+        self._skipped_models: set[str] = set()  # not found or out of daily quota: don't retry them on every call
         self._client = client
+        self.log_final_failure = log_final_failure  # False inside a chain: the chain reports the switch itself
 
         # Token and cost tracking (Free Tier = $0.00 cost)
         self.total_prompt_tokens = 0
@@ -45,7 +51,10 @@ class GeminiClient(LLMClient):
             return self._client
         if not self.settings.gemini_api_key:
             raise ValueError("Gemini API key is missing. Set GEMINI_API_KEY in .env.")
-        self._client = genai.Client(api_key=self.settings.gemini_api_key)
+        self._client = genai.Client(
+            api_key=self.settings.gemini_api_key,
+            http_options=types.HttpOptions(timeout=int(self.settings.gemini_timeout_seconds * 1000)),
+        )
         return self._client
 
     def generate(self, prompt: str, system_instruction: str | None = None) -> str:
@@ -109,15 +118,61 @@ class GeminiClient(LLMClient):
         self,
         prompt: str,
         config: types.GenerateContentConfig,
-        backoff_base_seconds: float = 1.0,
+        backoff_base_seconds: float | None = None,
     ) -> Any:
-        """Execute generate_content with exponential backoff on transient errors."""
+        """Try the primary model, then each fallback model in order, when one stays busy or is missing."""
+        models = [self.model, *self.fallback_models]
+        for index, model in enumerate(models):
+            is_last = index == len(models) - 1
+            if model in self._skipped_models and not is_last:
+                continue
+            # A model with a fallback behind it gets fewer retries so the switch happens sooner.
+            retries = self.max_retries if is_last else min(self.max_retries, 2)
+            try:
+                return self._call_model(model, prompt, config, retries, backoff_base_seconds)
+            except Exception as err:
+                if is_last or not self._should_fall_back(err):
+                    if self.log_final_failure:
+                        logger.error("Could not get an answer from %s: %s.", model, plain_error(err))
+                    raise
+                if self._is_permanent_for_now(err):
+                    self._skipped_models.add(model)
+                logger.warning("%s: %s. Trying %s instead.", model, plain_error(err), models[index + 1])
+        raise RuntimeError("Unexpected failure executing Gemini request.")
+
+    @staticmethod
+    def _is_daily_quota(err: Exception) -> bool:
+        """A per-day quota stays exhausted for hours, so retrying the same model only wastes requests."""
+        return isinstance(err, errors.APIError) and getattr(err, "code", None) == 429 and "PerDay" in str(err)
+
+    @staticmethod
+    def _is_permanent_for_now(err: Exception) -> bool:
+        return GeminiClient._is_daily_quota(err) or (
+            isinstance(err, errors.APIError) and getattr(err, "code", None) == 404
+        )
+
+    @staticmethod
+    def _should_fall_back(err: Exception) -> bool:
+        """Busy, rate-limited, or unknown model: another model may still answer. A bad request will not."""
+        if isinstance(err, errors.APIError) and getattr(err, "code", None) == 404:
+            return True
+        return GeminiClient._is_transient_error(err)
+
+    def _call_model(
+        self,
+        model: str,
+        prompt: str,
+        config: types.GenerateContentConfig,
+        max_retries: int,
+        backoff_base_seconds: float | None = None,
+    ) -> Any:
+        """Execute generate_content on one model with exponential backoff on transient errors."""
         last_exception: Exception | None = None
 
-        for attempt in range(1, self.max_retries + 1):
+        for attempt in range(1, max_retries + 1):
             try:
                 response = self.client.models.generate_content(
-                    model=self.model,
+                    model=model,
                     contents=prompt,
                     config=config,
                 )
@@ -128,22 +183,21 @@ class GeminiClient(LLMClient):
                     raise  # a bug or bad input, not a Gemini or network failure
                 last_exception = err
                 is_transient = self._is_transient_error(err)
-                if not is_transient or attempt >= self.max_retries:
-                    logger.error(
-                        "Gemini call failed permanently on attempt %d/%d: %s",
-                        attempt,
-                        self.max_retries,
-                        err,
-                    )
+                if not is_transient or attempt >= max_retries or self._is_daily_quota(err):
+                    logger.debug("Gemini call to %s gave up on attempt %d/%d: %s", model, attempt, max_retries, err)
                     raise
 
-                sleep_time = backoff_base_seconds * (2 ** (attempt - 1))
+                base = self.settings.gemini_backoff_seconds if backoff_base_seconds is None else backoff_base_seconds
+                sleep_time = min(base * (2 ** (attempt - 1)), self.settings.gemini_backoff_max_seconds)
+                sleep_time += random.uniform(0, sleep_time * 0.25)  # jitter so parallel callers don't retry in lockstep
+                logger.debug("Gemini transient error on %s attempt %d/%d: %s", model, attempt, max_retries, err)
                 logger.warning(
-                    "Gemini transient error on attempt %d/%d (%s). Retrying in %.1fs...",
-                    attempt,
-                    self.max_retries,
-                    err,
+                    "%s: %s. Trying again in %.0fs (%d of %d).",
+                    model,
+                    plain_error(err),
                     sleep_time,
+                    attempt,
+                    max_retries,
                 )
                 time.sleep(sleep_time)
 

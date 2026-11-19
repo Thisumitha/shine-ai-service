@@ -154,3 +154,23 @@ def test_groundedness_is_none_when_the_judge_fails_not_zero():
 
     llm.generate_json.return_value = json.dumps({"claims": [{"supported": True}, {"supported": False}]})
     assert groundedness("An answer [S1].", chunks, llm) == 0.5  # computed from the verdicts, not given by the model
+
+
+def test_limit_keeps_refusal_questions_in_the_sample():
+    items = load_dataset("evaluation/dataset.jsonl", limit=5)
+    refusals = [i for i in items if not i["is_answerable"]]
+    assert len(items) == 5
+    assert 1 <= len(refusals) <= 2  # the hallucination check is part of even a small run
+    assert all(i["is_answerable"] for i in items if i not in refusals)
+
+
+def test_limit_one_and_no_limit_are_unchanged():
+    assert len(load_dataset("evaluation/dataset.jsonl", limit=1)) == 1
+    assert load_dataset("evaluation/dataset.jsonl", limit=1)[0]["is_answerable"]
+    assert len(load_dataset("evaluation/dataset.jsonl")) == 40
+    assert len(load_dataset("evaluation/dataset.jsonl", limit=40)) == 40
+
+
+def test_limit_on_the_sample_dataset_also_includes_a_refusal():
+    items = load_dataset("evaluation/sample_dataset.jsonl", limit=5)
+    assert any(not i["is_answerable"] for i in items)

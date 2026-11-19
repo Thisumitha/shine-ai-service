@@ -17,6 +17,7 @@ from typing import Any
 import time
 
 from app.domain.entities.chunk import RetrievedChunk
+from app.infrastructure.llm.error_messages import is_service_error, plain_error
 from app.logging_setup import quiet_libraries
 from app.services.agent.act import ActStage
 from app.services.answer_service import REFUSAL_MESSAGE
@@ -35,6 +36,19 @@ logger = logging.getLogger("evaluator")
 
 
 EVAL_TOP_K = 5  # Hit@5 needs five retrieved chunks
+_embedding_warning_shown = False
+
+
+def _warn_embedding_scores_skipped(err: BaseException) -> None:
+    """Say once per run (not once per question) why Context and Answer Relevance are blank."""
+    global _embedding_warning_shown
+    if not _embedding_warning_shown:
+        _embedding_warning_shown = True
+        logger.warning(
+            "Context Relevance and Answer Relevance are skipped: Gemini embeddings are unavailable (%s). "
+            "Answers and the other scores continue.",
+            plain_error(err),
+        )
 
 
 def _retriever_for(config_name: str, container: Any) -> Any:
@@ -62,8 +76,27 @@ def load_dataset(dataset_path: str, limit: int | None = None) -> list[dict[str, 
                 items.append(json.loads(line))
 
     if limit is not None and limit > 0:
-        items = items[:limit]
+        items = _sample(items, limit)
     return items
+
+
+def _sample(items: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    """The first `limit` questions, but with a few unanswerable ones kept in.
+
+    Datasets list their refusal questions last, so plain `items[:limit]` would never test whether the
+    system refuses (the hallucination check). The sample keeps the unanswerable questions' share of the
+    dataset, at least one when there is room for it, spread evenly, and the original order.
+    """
+    unanswerable = [i for i, item in enumerate(items) if not item.get("is_answerable", True)]
+    if limit >= len(items) or limit < 2 or not unanswerable:
+        return items[:limit]
+
+    wanted = max(1, round(limit * len(unanswerable) / len(items)))
+    wanted = min(wanted, len(unanswerable), limit - 1)  # leave room for at least one answerable question
+    step = len(unanswerable) / wanted
+    refusals = {unanswerable[int(k * step)] for k in range(wanted)}
+    answerable = [i for i in range(len(items)) if i not in set(unanswerable)][: limit - wanted]
+    return [items[i] for i in sorted(refusals | set(answerable))]
 
 
 class MockAblationRetriever:
@@ -148,12 +181,19 @@ def evaluate_single_query(
         is_refusal = answer.strip() == REFUSAL_MESSAGE.strip()
         retrieved_pages = [h["metadata"].get("page_number") for h in hits]
         if is_answerable:
-            live_scores = {
-                "context_relevance": live_judges.context_relevance(
-                    question, [h["text"] for h in hits], container.embedder
-                ),
-                "answer_relevance": live_judges.answer_relevance(question, answer, container.embedder),
-            }
+            try:
+                live_scores = {
+                    "context_relevance": live_judges.context_relevance(
+                        question, [h["text"] for h in hits], container.embedder
+                    ),
+                    "answer_relevance": live_judges.answer_relevance(question, answer, container.embedder),
+                }
+            except Exception as err:
+                if not is_service_error(err):
+                    raise
+                # These two scores need Gemini embeddings and no local model can stand in for them (the
+                # numbers would not be comparable). Leave them blank and keep scoring everything else.
+                _warn_embedding_scores_skipped(err)
             if not is_refusal:
                 grounded = live_judges.groundedness(answer, hits[:4], container.llm_client)
                 if grounded is not None:  # None = the judge failed, so there is no score to average

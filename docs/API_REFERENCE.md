@@ -191,30 +191,23 @@ Called by the Spring Boot backend when an enrolled student asks a question. Spri
 - **Notes**:
   - `courseIds`: Searched in a single call across all courses using the hybrid retriever (`course_ids: set[int]`).
   - `sessionId`: If omitted in request, a new UUID is generated and returned so Spring can pass it back on subsequent turns.
-  - If no relevant course materials are found, returns HTTP `200 OK` with refusal text in `answer` and an empty `sources: []` list.
+  - If no relevant course materials are found, returns HTTP `200 OK` with refusal text in `answer`, `is_refusal: true` and an empty `sources: []` list. Note the key is `is_refusal` (snake case), unlike the other keys.
+  - `studentEmail` *(optional)*: the student Spring verified from the login. The service uses it to read that student's timetable, invoices and attendance back from Spring.
 
 ---
 
 ### F. Ingestion & Indexing (Internal)
 
-#### `POST /internal/index-pdf`
-Trigger asynchronous background PDF parsing, OCR, chunking, and embedding.
+#### `POST /internal/index`
+Spring sends the PDF itself. The service saves it, queues a background job (parse, OCR, chunk, embed) and answers at once.
 
 - **Headers**: `X-Internal-Secret: <secret>`
-- **Request Body**:
-```json
-{
-  "item_id": 201,
-  "course_id": 101,
-  "file_path": "data/pdfs/Algorithms_101.pdf"
-}
-```
+- **Request**: `multipart/form-data` with the fields `file` (the PDF), `itemId`, `courseId`, `topicId` (optional) and `title`.
+- **Response `202 Accepted`**: the job, for example `{"job_id": 55, "status": "QUEUED", ...}`.
+- **Errors**: `400` if the file is not a PDF, `413` if it is larger than `MAX_PDF_MB`, `401` for a wrong or missing secret.
 
-- **Response `202 Accepted`**:
-```json
-{
-  "job_id": 55,
-  "status": "QUEUED"
-}
-```
+#### `GET /internal/index/{itemId}`
+Job state of one material: `QUEUED`, `EXTRACTING`, `INDEXED` or `FAILED`. `404` when the service has no job for it.
 
+#### `DELETE /internal/index/{itemId}`
+Removes the material's chunks and saved file. Answers `204`.

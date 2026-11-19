@@ -67,7 +67,8 @@ class ReasonStage:
             )
 
         except Exception as exc:
-            logger.warning("Reasoning classification failed (%s). Safely defaulting to COURSE_CONTENT.", exc)
+            logger.warning("Could not classify the question, treating it as a course question.")
+            logger.debug("Classification failure detail: %s", exc)
             return ReasonResult(
                 intent=INTENT_COURSE_CONTENT,
                 reason="Default fallback due to classification error",

@@ -135,11 +135,11 @@ def build_container(settings: Settings | None = None) -> Container:
             logger.debug("Worker could not be loaded: %s", exc)
 
     # Member 3: Memory, LLM Client, Answer Generator, and Agent
-    from app.infrastructure.llm.gemini_client import GeminiClient
+    from app.infrastructure.llm.factory import build_llm_client
     from app.infrastructure.memory.sqlite_chat_store import SqliteChatStore
 
     chat_store = SqliteChatStore(db_path=settings.sqlite_path)
-    llm_client = GeminiClient(settings=settings)
+    llm_client = build_llm_client(settings)
     answer_service = AnswerService(llm_client=llm_client)
     self_check_service = SelfCheckService(llm_client=llm_client, chat_store=chat_store)
 
