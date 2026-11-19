@@ -92,7 +92,7 @@ def test_gemini_client_retry_on_transient_error(monkeypatch):
 def test_gemini_client_fails_after_max_retries(monkeypatch):
     monkeypatch.setattr("time.sleep", lambda _: None)
 
-    settings = Settings(gemini_api_key="fake-key", gemini_max_retries=2)
+    settings = Settings(gemini_api_key="fake-key", gemini_max_retries=2, gemini_fallback_models="")
     mock_genai_client = MagicMock()
 
     rate_limit_err = errors.APIError(code=429, response_json={"message": "Quota exceeded"})
@@ -120,3 +120,68 @@ def test_gemini_client_non_transient_error_fails_immediately():
         client.generate("Hello")
 
     assert mock_genai_client.models.generate_content.call_count == 1
+
+
+def _fallback_client(side_effect):
+    settings = Settings(
+        gemini_api_key="fake-key",
+        gemini_model="primary",
+        gemini_fallback_models="second, third",
+        gemini_max_retries=2,
+    )
+    sdk = MagicMock()
+    sdk.models.generate_content.side_effect = side_effect
+    return GeminiClient(settings=settings, client=sdk), sdk
+
+
+def _models_called(sdk):
+    return [c.kwargs["model"] for c in sdk.models.generate_content.call_args_list]
+
+
+def test_falls_back_to_next_model_in_order(monkeypatch):
+    monkeypatch.setattr("time.sleep", lambda _: None)
+    busy = errors.APIError(code=503, response_json={"message": "high demand"})
+    client, sdk = _fallback_client([busy, busy, make_mock_response("from second")])
+
+    assert client.generate("Hi") == "from second"
+    assert _models_called(sdk) == ["primary", "primary", "second"]
+
+
+def test_unknown_model_falls_back_without_retrying(monkeypatch):
+    monkeypatch.setattr("time.sleep", lambda _: None)
+    missing = errors.APIError(code=404, response_json={"message": "model not found"})
+    client, sdk = _fallback_client([missing, make_mock_response("from second")])
+
+    assert client.generate("Hi") == "from second"
+    assert _models_called(sdk) == ["primary", "second"]
+
+
+def test_raises_after_every_model_fails(monkeypatch):
+    monkeypatch.setattr("time.sleep", lambda _: None)
+    busy = errors.APIError(code=503, response_json={"message": "high demand"})
+    client, sdk = _fallback_client([busy] * 6)
+
+    with pytest.raises(errors.APIError):
+        client.generate("Hi")
+    assert _models_called(sdk) == ["primary", "primary", "second", "second", "third", "third"]
+
+
+def test_bad_request_does_not_fall_back():
+    bad = errors.APIError(code=400, response_json={"message": "Invalid argument"})
+    client, sdk = _fallback_client(bad)
+
+    with pytest.raises(errors.APIError):
+        client.generate("Hi")
+    assert _models_called(sdk) == ["primary"]
+
+
+def test_daily_quota_skips_retries_and_is_remembered(monkeypatch):
+    monkeypatch.setattr("time.sleep", lambda _: None)
+    daily = errors.APIError(
+        code=429, response_json={"message": "GenerateRequestsPerDayPerProjectPerModel-FreeTier exceeded"}
+    )
+    client, sdk = _fallback_client([daily, make_mock_response("one"), make_mock_response("two")])
+
+    assert client.generate("Hi") == "one"
+    assert client.generate("Hi again") == "two"
+    assert _models_called(sdk) == ["primary", "second", "second"]

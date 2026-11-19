@@ -12,7 +12,9 @@ def quiet_libraries() -> None:
     import os
 
     if os.environ.get("SHINE_DEBUG"):
-        logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+        logging.basicConfig(level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(message)s")
+        for name in _NOISY:
+            logging.getLogger(name).setLevel(logging.INFO)
         return
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
     for name in _NOISY:

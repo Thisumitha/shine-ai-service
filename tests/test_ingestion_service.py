@@ -369,3 +369,22 @@ def test_sparse_index_failure_does_not_save_chunks_json(
     assert len(sparse_indexer.index_calls) == 1
 
     assert not (tmp_path / "chunks" / "12.json").exists()
+
+
+
+def test_process_reports_each_stage_so_a_slow_step_is_visible(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.services.ingestion_service.chunk_document", lambda *args: [make_chunk()])
+    service, *_ = make_service(tmp_path)
+    messages: list[str] = []
+
+    service.process(make_job(), progress=messages.append)
+
+    stages = [m.split()[0] for m in messages if m[0].isdigit()]
+    assert stages == ["1/4", "2/4", "3/4", "4/4"]
+    assert any("embedding 1 chunks with Gemini" in m for m in messages)
+
+
+def test_process_works_without_a_progress_callback(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.services.ingestion_service.chunk_document", lambda *args: [make_chunk()])
+    service, *_ = make_service(tmp_path)
+    assert service.process(make_job()) == "INDEXED"  # the background worker calls it this way

@@ -174,21 +174,10 @@ class SparseIndex(SparseIndexer):
         if self._matrix is None:
             return []
 
-        try:
-            query_vector = self.vectorizer.transform([query.strip()])
-        except ValueError:
+        scored = self._similarities(query)
+        if scored is None:
             return []
-
-        # Dot product of the query with every chunk, then normalise by both magnitudes.
-        dots = np.asarray((self._matrix @ query_vector.T).todense()).ravel()
-        query_norm = float(np.sqrt(query_vector.multiply(query_vector).sum()))
-        denominators = self._doc_norms * query_norm
-        similarities = np.divide(
-            dots,
-            denominators,
-            out=np.zeros_like(dots, dtype=float),
-            where=denominators > 0,
-        )
+        dots, query_norm, similarities = scored
 
         results = []
 
@@ -237,6 +226,56 @@ class SparseIndex(SparseIndexer):
         )
 
         return results[:top_k]
+
+    def _similarities(self, query: str):
+        """Dot product, query magnitude and cosine of the query against every chunk (None if no usable words)."""
+        try:
+            query_vector = self.vectorizer.transform([query.strip()])
+        except ValueError:
+            return None
+
+        # Dot product of the query with every chunk, then normalise by both magnitudes.
+        dots = np.asarray((self._matrix @ query_vector.T).todense()).ravel()
+        query_norm = float(np.sqrt(query_vector.multiply(query_vector).sum()))
+        denominators = self._doc_norms * query_norm
+        similarities = np.divide(
+            dots,
+            denominators,
+            out=np.zeros_like(dots, dtype=float),
+            where=denominators > 0,
+        )
+        return dots, query_norm, similarities
+
+    def score_chunk(self, query: str, chunk_id: str, course_ids: set[int] | None = None) -> dict | None:
+        """The keyword (TF-IDF) score of one chunk, even when it is not among the top results.
+
+        `rank` is its position among the matching chunks of `course_ids` (default: its own course),
+        or None when it shares no word with the query.
+        """
+        if self._matrix is None:
+            return None
+        index = next((i for i, record in enumerate(self._records) if record["chunk_id"] == chunk_id), None)
+        scored = self._similarities(query)
+        if index is None or scored is None:
+            return None
+        dots, query_norm, similarities = scored
+
+        cosine = float(similarities[index])
+        courses = course_ids or {self._records[index].get("course_id")}
+        rank = None
+        if cosine > 0:
+            rank = 1 + sum(
+                1
+                for i, record in enumerate(self._records)
+                if record.get("course_id") in courses and similarities[i] > cosine
+            )
+        return {
+            "dot_product": float(dots[index]),
+            "query_magnitude": query_norm,
+            "chunk_magnitude": float(self._doc_norms[index]),
+            "cosine": cosine,
+            "rank": rank,
+        }
 
     def explain_terms(self, query: str, chunk_id: str, top_n: int = 5) -> list[dict]:
         """Terms that contribute most to the dot product between a query and one chunk.

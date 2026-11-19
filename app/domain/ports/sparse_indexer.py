@@ -25,3 +25,7 @@ class SparseIndexer(ABC):
     ) -> list[dict]:
         """Retrieve relevant chunks using sparse search."""
         ...
+
+    def score_chunk(self, query: str, chunk_id: str, course_ids: set[int] | None = None) -> dict | None:
+        """Keyword score of one chunk (cosine, rank, ...), or None when the index cannot say."""
+        return None

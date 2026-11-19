@@ -74,3 +74,16 @@ def test_chat_client_does_not_retry_a_bug(monkeypatch):
     with pytest.raises(KeyError):
         client.generate("hi")
     assert sdk.models.generate_content.call_count == 1
+
+
+def test_embedder_logs_each_retry_so_a_network_wait_is_visible(monkeypatch, caplog):
+    import logging
+
+    monkeypatch.setattr(GeminiEmbedder._embed_batch.retry, "sleep", lambda _: None)
+    client = Mock()
+    client.models.embed_content.side_effect = [httpx2_error(), Mock(embeddings=[Mock(values=[0.1])])]
+
+    with caplog.at_level(logging.WARNING):
+        GeminiEmbedder(client=client).embed(["hello"])
+
+    assert any("Retrying" in r.getMessage() and "getaddrinfo" in r.getMessage() for r in caplog.records)

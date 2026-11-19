@@ -7,7 +7,7 @@ Code: `evaluation/` (`metrics.py`, `live_judges.py`, `run_eval.py`). Run it with
 | File | Rows | Course | PDF it needs |
 | :--- | :---: | :---: | :--- |
 | `evaluation/sample_dataset.jsonl` (default) | 16 (14 answerable, 2 not) | 1 | `sample/Introduction_to_Software_Engineering.pdf` (`python -m app.cli load-sample`) |
-| `evaluation/dataset.jsonl` | 40 (35 answerable, 5 not) | 101 | three marketing PDFs that are **not** in the repo; ingest them with `--course 101` first, otherwise every answer is a refusal |
+| `evaluation/dataset.jsonl` | 40 (35 answerable, 5 not) | 101 | the three business PDFs in `sample/business/` (`python -m app.cli load-sample --set business`, which uses course 101); without them every answer is a refusal |
 
 Each row is a Question / Answer / Context triple:
 

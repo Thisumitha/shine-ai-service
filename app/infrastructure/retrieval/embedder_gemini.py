@@ -1,4 +1,6 @@
 
+import logging
+
 from google import genai
 from google.genai.errors import APIError
 from tenacity import (
@@ -6,15 +8,25 @@ from tenacity import (
     stop_after_attempt,
     wait_exponential,
     retry_if_exception,
+    before_sleep_log,
 )
 
 from app.config import get_settings
 from app.domain.ports.embedder import Embedder
+from app.infrastructure.llm.error_messages import is_daily_quota
 from app.infrastructure.network_errors import is_network_error
 
 
+logger = logging.getLogger(__name__)
+
+
 def _is_retryable(error: BaseException) -> bool:
-    """Gemini API errors and any temporary network failure (including DNS lookups) are retried."""
+    """Gemini API errors and any temporary network failure (including DNS lookups) are retried.
+
+    A used-up daily quota is not: it stays used up for hours, so waiting and retrying cannot help.
+    """
+    if is_daily_quota(error):
+        return False
     return isinstance(error, APIError) or is_network_error(error)
 
 
@@ -81,6 +93,7 @@ class GeminiEmbedder(Embedder):
             min=1,
             max=10,
         ),
+        before_sleep=before_sleep_log(logger, logging.WARNING),  # say so when the network makes us wait
         reraise=True,
     )
     def _embed_batch(self, texts: list[str]) -> list[list[float]]:
