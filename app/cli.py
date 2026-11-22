@@ -13,6 +13,7 @@ import argparse
 import json
 import shutil
 import sys
+import time
 from pathlib import Path
 
 from app.config import get_settings
@@ -45,7 +46,10 @@ def _load_registry() -> dict[str, int]:
 
 
 def cmd_ingest(args: argparse.Namespace) -> None:
+    print("[START]  loading libraries and connecting (Chroma, Gemini) ...", flush=True)
+    started = time.monotonic()
     container = _container()
+    print(f"[READY]  loaded in {time.monotonic() - started:.0f}s", flush=True)
     if container.ingestion is None:
         sys.exit("Ingestion is not available (check pymupdf, chromadb and google-genai are installed).")
 

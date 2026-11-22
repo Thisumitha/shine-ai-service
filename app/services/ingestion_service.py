@@ -68,6 +68,7 @@ class IngestionService:
         item_id = job["item_id"]
 
         # 1. Extract PDF content.
+        say("1/4 reading the PDF (OCR on image pages can be slow) ...")
         started = time.monotonic()
         document = self.parse(job["pdf_path"])
         ocr_pages = [p.page_number for p in document.pages if p.used_ocr]
@@ -131,6 +132,8 @@ class IngestionService:
                 metadata["topic_id"] = chunk.topic_id
 
             metadatas.append(metadata)
+
+        say("4/4 saving to Chroma and the TF-IDF index ...")
 
         # 5. Replace the item's dense vectors.
         # New vectors are upserted before obsolete IDs are deleted.

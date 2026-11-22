@@ -379,8 +379,9 @@ def test_process_reports_each_stage_so_a_slow_step_is_visible(tmp_path, monkeypa
 
     service.process(make_job(), progress=messages.append)
 
-    stages = [m.split()[0] for m in messages if m[0].isdigit()]
+    stages = list(dict.fromkeys(m.split()[0] for m in messages if m[0].isdigit()))
     assert stages == ["1/4", "2/4", "3/4", "4/4"]
+    assert any(m.startswith("1/4 reading") for m in messages)  # announced before the slow read starts
     assert any("embedding 1 chunks with Gemini" in m for m in messages)
 
 
